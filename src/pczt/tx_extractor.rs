@@ -6,6 +6,7 @@ use rand::{CryptoRng, RngCore};
 use super::Action;
 use crate::{
     bundle::{Authorization, Authorized, EffectsOnly},
+    memo::MemoSize,
     primitives::redpallas::{self, Binding, SpendAuth},
     Proof,
 };
@@ -153,7 +154,7 @@ impl Authorization for Unbound {
     type SpendAuth = redpallas::Signature<SpendAuth>;
 }
 
-impl<V> crate::Bundle<Unbound, V> {
+impl<V, M: MemoSize> crate::Bundle<Unbound, V, M> {
     /// Verifies the given sighash with every `spend_auth_sig`, and then binds the bundle.
     ///
     /// Returns `None` if the given sighash does not validate against every `spend_auth_sig`.
@@ -161,7 +162,7 @@ impl<V> crate::Bundle<Unbound, V> {
         self,
         sighash: [u8; 32],
         rng: R,
-    ) -> Option<crate::Bundle<Authorized, V>> {
+    ) -> Option<crate::Bundle<Authorized, V, M>> {
         if self
             .actions()
             .iter()

@@ -33,6 +33,7 @@ pub mod bundle;
 pub mod circuit;
 mod constants;
 pub mod keys;
+pub mod memo;
 pub mod note;
 pub mod note_encryption;
 pub mod pczt;

@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use ff::PrimeField;
 use incrementalmerkletree::Hashable;
 use pasta_curves::pallas;
+use zcash_note_encryption::note_bytes::NoteBytes;
 use zcash_note_encryption::OutgoingCipherKey;
 use zip32::ChildIndex;
 
@@ -227,17 +228,17 @@ impl Output {
             .into_option()
             .ok_or(ParseError::InvalidExtractedNoteCommitment)?;
 
-        let encrypted_note = TransmittedNoteCiphertext {
-            epk_bytes: ephemeral_key,
-            enc_ciphertext: enc_ciphertext
-                .as_slice()
-                .try_into()
-                .map_err(|_| ParseError::InvalidEncCiphertext)?,
-            out_ciphertext: out_ciphertext
-                .as_slice()
-                .try_into()
-                .map_err(|_| ParseError::InvalidOutCiphertext)?,
-        };
+        let enc_ciphertext_bytes = NoteBytes::from_slice(enc_ciphertext.as_slice())
+            .ok_or(ParseError::InvalidEncCiphertext)?;
+        let out_ciphertext_bytes: [u8; 80] = out_ciphertext
+            .as_slice()
+            .try_into()
+            .map_err(|_| ParseError::InvalidOutCiphertext)?;
+        let encrypted_note = TransmittedNoteCiphertext::from_parts(
+            ephemeral_key,
+            enc_ciphertext_bytes,
+            out_ciphertext_bytes,
+        );
 
         let recipient = recipient
             .as_ref()
