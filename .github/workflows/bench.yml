@@ -2,7 +2,7 @@ name: Benchmarks
 on:
   push:
     branches:
-      - main
+      - dashified
 
 permissions:
   contents: write
