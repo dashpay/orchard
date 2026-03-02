@@ -392,13 +392,13 @@ impl<M: MemoSize> OutputInfo<M> {
     }
 }
 
-impl OutputInfo<ZcashMemo> {
+impl<M: MemoSize> OutputInfo<M> {
     fn into_pczt(
         self,
         cv_net: &ValueCommitment,
         nf_old: Nullifier,
         rng: impl RngCore,
-    ) -> crate::pczt::Output {
+    ) -> crate::pczt::Output<M> {
         let (note, cmx, encrypted_note) = self.build(cv_net, nf_old, rng);
 
         crate::pczt::Output {
@@ -467,10 +467,8 @@ impl<M: MemoSize> ActionInfo<M> {
             Circuit::from_action_context_unchecked(self.spend, note, alpha, self.rcv),
         )
     }
-}
 
-impl ActionInfo<ZcashMemo> {
-    fn build_for_pczt(self, mut rng: impl RngCore) -> crate::pczt::Action {
+    fn build_for_pczt(self, mut rng: impl RngCore) -> crate::pczt::Action<M> {
         let v_net = self.value_sum();
         let cv_net = ValueCommitment::derive(v_net, self.rcv.clone());
 
@@ -673,15 +671,13 @@ impl<M: MemoSize> Builder<M> {
             self.outputs,
         )
     }
-}
 
-impl Builder<ZcashMemo> {
     /// Builds a bundle containing the given spent notes and outputs along with their
     /// metadata, for inclusion in a PCZT.
     pub fn build_for_pczt(
         self,
         rng: impl RngCore,
-    ) -> Result<(crate::pczt::Bundle, BundleMetadata), BuildError> {
+    ) -> Result<(crate::pczt::Bundle<M>, BundleMetadata), BuildError> {
         let anchor = self.anchor;
         build_bundle(
             rng,

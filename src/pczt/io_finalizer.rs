@@ -10,9 +10,11 @@ use crate::{
     value::{ValueCommitTrapdoor, ValueCommitment},
 };
 
+use crate::memo::MemoSize;
+
 use super::SignerError;
 
-impl super::Bundle {
+impl<M: MemoSize> super::Bundle<M> {
     /// Finalizes the IO for this bundle.
     pub fn finalize_io<R: RngCore + CryptoRng>(
         &mut self,

@@ -2,12 +2,13 @@ use core::fmt;
 
 use crate::{
     keys::{FullViewingKey, SpendValidatingKey},
+    memo::MemoSize,
     note::{ExtractedNoteCommitment, Rho},
     value::ValueCommitment,
     Note,
 };
 
-impl super::Action {
+impl<M: MemoSize> super::Action<M> {
     /// Verifies that the `cv_net` field is consistent with the note fields.
     ///
     /// Requires that the following optional fields are set:
@@ -116,7 +117,7 @@ impl super::Spend {
     }
 }
 
-impl super::Output {
+impl<M: MemoSize> super::Output<M> {
     /// Verifies that the `cmx` field is consistent with the note fields.
     ///
     /// Requires that the following optional fields are set:

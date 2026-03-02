@@ -15,6 +15,7 @@ use super::{Action, Bundle, Output, Spend, Zip32Derivation};
 use crate::{
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
+    memo::MemoSize,
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, SpendAuth},
     tree::{MerkleHashOrchard, MerklePath},
@@ -22,11 +23,11 @@ use crate::{
     Address, Anchor, Proof, NOTE_COMMITMENT_TREE_DEPTH,
 };
 
-impl Bundle {
+impl<M: MemoSize> Bundle<M> {
     /// Parses a PCZT bundle from its component parts.
     /// `value_sum` is represented as `(magnitude, is_negative)`.
     pub fn parse(
-        actions: Vec<Action>,
+        actions: Vec<Action<M>>,
         flags: u8,
         value_sum: (u64, bool),
         anchor: [u8; 32],
@@ -69,12 +70,12 @@ impl Bundle {
     }
 }
 
-impl Action {
+impl<M: MemoSize> Action<M> {
     /// Parses a PCZT action from its component parts.
     pub fn parse(
         cv_net: [u8; 32],
         spend: Spend,
-        output: Output,
+        output: Output<M>,
         rcv: Option<[u8; 32]>,
     ) -> Result<Self, ParseError> {
         let cv_net = ValueCommitment::from_bytes(&cv_net)
@@ -206,7 +207,7 @@ impl Spend {
     }
 }
 
-impl Output {
+impl<M: MemoSize> Output<M> {
     /// Parses a PCZT output from its component parts, and the corresponding `Spend`'s
     /// nullifier.
     #[allow(clippy::too_many_arguments)]

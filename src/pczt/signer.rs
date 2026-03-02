@@ -4,10 +4,11 @@ use rand::{CryptoRng, RngCore};
 
 use crate::{
     keys::SpendAuthorizingKey,
+    memo::MemoSize,
     primitives::redpallas::{self, SpendAuth},
 };
 
-impl super::Action {
+impl<M: MemoSize> super::Action<M> {
     /// Signs the Orchard spend with the given spend authorizing key.
     ///
     /// It is the caller's responsibility to perform any semantic validity checks on the
