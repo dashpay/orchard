@@ -13,6 +13,7 @@ use zip32::ChildIndex;
 use crate::{
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
+    memo::{MemoSize, ZcashMemo},
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, Binding, SpendAuth},
     tree::MerklePath,
@@ -51,12 +52,12 @@ pub use tx_extractor::{TxExtractorError, Unbound};
 /// [the regular `Bundle` struct]: crate::Bundle
 #[derive(Debug, Getters)]
 #[getset(get = "pub")]
-pub struct Bundle {
+pub struct Bundle<M: MemoSize = ZcashMemo> {
     /// The Orchard actions in this bundle.
     ///
     /// Entries are added by the Constructor, and modified by an Updater, IO Finalizer,
     /// Signer, Combiner, or Spend Finalizer.
-    pub(crate) actions: Vec<Action>,
+    pub(crate) actions: Vec<Action<M>>,
 
     /// The flags for the Orchard bundle.
     ///
@@ -88,14 +89,14 @@ pub struct Bundle {
     pub(crate) bsk: Option<redpallas::SigningKey<Binding>>,
 }
 
-impl Bundle {
+impl<M: MemoSize> Bundle<M> {
     /// Returns a mutable reference to the actions in this bundle.
     ///
     /// This is used by Signers to apply signatures with [`Action::sign`].
     ///
     /// Note: updating the `Action`s via the returned slice will not update other
     /// fields of the bundle dependent on them, such as `value_sum` and `bsk`.
-    pub fn actions_mut(&mut self) -> &mut [Action] {
+    pub fn actions_mut(&mut self) -> &mut [Action<M>] {
         &mut self.actions
     }
 }
@@ -108,7 +109,7 @@ impl Bundle {
 /// [the regular `Action` struct]: crate::Action
 #[derive(Debug, Getters)]
 #[getset(get = "pub")]
-pub struct Action {
+pub struct Action<M: MemoSize = ZcashMemo> {
     /// A commitment to the net value created or consumed by this action.
     pub(crate) cv_net: ValueCommitment,
 
@@ -116,7 +117,7 @@ pub struct Action {
     pub(crate) spend: Spend,
 
     /// The output half of this action.
-    pub(crate) output: Output,
+    pub(crate) output: Output<M>,
 
     /// The value commitment randomness.
     ///
@@ -214,7 +215,7 @@ pub struct Spend {
 /// Information about an Orchard output within a transaction.
 #[derive(Getters)]
 #[getset(get = "pub")]
-pub struct Output {
+pub struct Output<M: MemoSize = ZcashMemo> {
     /// A commitment to the new note being created.
     pub(crate) cmx: ExtractedNoteCommitment,
 
@@ -224,7 +225,7 @@ pub struct Output {
     /// - `ephemeral_key`
     /// - `enc_ciphertext`
     /// - `out_ciphertext`
-    pub(crate) encrypted_note: TransmittedNoteCiphertext,
+    pub(crate) encrypted_note: TransmittedNoteCiphertext<M>,
 
     /// The address that will receive the output.
     ///
@@ -275,7 +276,7 @@ pub struct Output {
     pub(crate) proprietary: BTreeMap<String, Vec<u8>>,
 }
 
-impl fmt::Debug for Output {
+impl<M: MemoSize> fmt::Debug for Output<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Output")
             .field("cmx", &self.cmx)
@@ -343,6 +344,7 @@ mod tests {
         circuit::ProvingKey,
         constants::MERKLE_DEPTH_ORCHARD,
         keys::{FullViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
+        memo::ZcashMemo,
         note::{ExtractedNoteCommitment, RandomSeed, Rho},
         pczt::{ProverError, TxExtractorError, Zip32Derivation},
         primitives::redpallas::{self, SpendAuth},
@@ -387,7 +389,7 @@ mod tests {
         let recipient = fvk.address_at(0u32, Scope::External);
 
         // Run the Creator and Constructor roles.
-        let mut builder = Builder::new(
+        let mut builder: Builder<ZcashMemo> = Builder::new(
             BundleType::DEFAULT,
             EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
         );
@@ -464,7 +466,7 @@ mod tests {
         };
 
         // Run the Creator and Constructor roles.
-        let mut builder = Builder::new(BundleType::DEFAULT, anchor);
+        let mut builder: Builder<ZcashMemo> = Builder::new(BundleType::DEFAULT, anchor);
         builder
             .add_spend(fvk.clone(), note, merkle_path.into())
             .unwrap();

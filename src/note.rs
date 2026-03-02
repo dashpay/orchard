@@ -1,5 +1,6 @@
 //! Data structures used for note construction.
 use core::fmt;
+use core::marker::PhantomData;
 use memuse::DynamicUsage;
 
 use ff::PrimeField;
@@ -10,6 +11,7 @@ use subtle::CtOption;
 
 use crate::{
     keys::{EphemeralSecretKey, FullViewingKey, Scope, SpendingKey},
+    memo::{MemoSize, ZcashMemo},
     spec::{to_base, to_scalar, NonZeroPallasScalar, PrfExpand},
     value::NoteValue,
     Address,
@@ -308,21 +310,38 @@ impl Note {
 
 /// An encrypted note.
 #[derive(Clone)]
-pub struct TransmittedNoteCiphertext {
+pub struct TransmittedNoteCiphertext<M: MemoSize = ZcashMemo> {
     /// The serialization of the ephemeral public key
     pub epk_bytes: [u8; 32],
     /// The encrypted note ciphertext
-    pub enc_ciphertext: [u8; 580],
+    pub enc_ciphertext: M::NoteCiphertextBytes,
     /// An encrypted value that allows the holder of the outgoing cipher
     /// key for the note to recover the note plaintext.
     pub out_ciphertext: [u8; 80],
+    _memo: PhantomData<M>,
 }
 
-impl fmt::Debug for TransmittedNoteCiphertext {
+impl<M: MemoSize> TransmittedNoteCiphertext<M> {
+    /// Constructs a `TransmittedNoteCiphertext` from its parts.
+    pub fn from_parts(
+        epk_bytes: [u8; 32],
+        enc_ciphertext: M::NoteCiphertextBytes,
+        out_ciphertext: [u8; 80],
+    ) -> Self {
+        Self {
+            epk_bytes,
+            enc_ciphertext,
+            out_ciphertext,
+            _memo: PhantomData,
+        }
+    }
+}
+
+impl<M: MemoSize> fmt::Debug for TransmittedNoteCiphertext<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TransmittedNoteCiphertext")
             .field("epk_bytes", &self.epk_bytes)
-            .field("enc_ciphertext", &hex::encode(self.enc_ciphertext))
+            .field("enc_ciphertext", &hex::encode(self.enc_ciphertext.as_ref()))
             .field("out_ciphertext", &hex::encode(self.out_ciphertext))
             .finish()
     }

@@ -8,6 +8,7 @@ use tracing::debug;
 use super::{Authorized, Bundle};
 use crate::{
     circuit::VerifyingKey,
+    memo::MemoSize,
     primitives::redpallas::{self, Binding, SpendAuth},
 };
 
@@ -37,9 +38,9 @@ impl BatchValidator {
     }
 
     /// Adds the proof and RedPallas signatures from the given bundle to the validator.
-    pub fn add_bundle<V: Copy + Into<i64>>(
+    pub fn add_bundle<V: Copy + Into<i64>, M: MemoSize>(
         &mut self,
-        bundle: &Bundle<Authorized, V>,
+        bundle: &Bundle<Authorized, V, M>,
         sighash: [u8; 32],
     ) {
         for action in bundle.actions().iter() {

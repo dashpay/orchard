@@ -1,6 +1,7 @@
 use memuse::DynamicUsage;
 
 use crate::{
+    memo::{MemoSize, ZcashMemo},
     note::{ExtractedNoteCommitment, Nullifier, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, SpendAuth},
     value::ValueCommitment,
@@ -15,7 +16,7 @@ use crate::{
 ///
 /// Every `Action` has a non-identity `rk`.
 #[derive(Debug, Clone)]
-pub struct Action<A> {
+pub struct Action<A, M: MemoSize = ZcashMemo> {
     /// The nullifier of the note being spent.
     nf: Nullifier,
     /// The randomized verification key for the note being spent.
@@ -23,14 +24,14 @@ pub struct Action<A> {
     /// A commitment to the new note being created.
     cmx: ExtractedNoteCommitment,
     /// The transmitted note ciphertext.
-    encrypted_note: TransmittedNoteCiphertext,
+    encrypted_note: TransmittedNoteCiphertext<M>,
     /// A commitment to the net value created or consumed by this action.
     cv_net: ValueCommitment,
     /// The authorization for this action.
     authorization: A,
 }
 
-impl<T> Action<T> {
+impl<T, M: MemoSize> Action<T, M> {
     /// Constructs an `Action` from its constituent parts.
     ///
     /// Returns `None` if `rk` is the identity [`pasta_curves::pallas::Point`].
@@ -46,7 +47,7 @@ impl<T> Action<T> {
         nf: Nullifier,
         rk: redpallas::VerificationKey<SpendAuth>,
         cmx: ExtractedNoteCommitment,
-        encrypted_note: TransmittedNoteCiphertext,
+        encrypted_note: TransmittedNoteCiphertext<M>,
         cv_net: ValueCommitment,
         authorization: T,
     ) -> Option<Self> {
@@ -76,7 +77,7 @@ impl<T> Action<T> {
     }
 
     /// Returns the encrypted note ciphertext.
-    pub fn encrypted_note(&self) -> &TransmittedNoteCiphertext {
+    pub fn encrypted_note(&self) -> &TransmittedNoteCiphertext<M> {
         &self.encrypted_note
     }
 
@@ -96,7 +97,7 @@ impl<T> Action<T> {
     }
 
     /// Transitions this action from one authorization state to another.
-    pub fn map<U>(self, step: impl FnOnce(T) -> U) -> Action<U> {
+    pub fn map<U>(self, step: impl FnOnce(T) -> U) -> Action<U, M> {
         Action {
             nf: self.nf,
             rk: self.rk,
@@ -108,7 +109,7 @@ impl<T> Action<T> {
     }
 
     /// Transitions this action from one authorization state to another.
-    pub fn try_map<U, E>(self, step: impl FnOnce(T) -> Result<U, E>) -> Result<Action<U>, E> {
+    pub fn try_map<U, E>(self, step: impl FnOnce(T) -> Result<U, E>) -> Result<Action<U, M>, E> {
         Ok(Action {
             nf: self.nf,
             rk: self.rk,
@@ -120,7 +121,7 @@ impl<T> Action<T> {
     }
 }
 
-impl DynamicUsage for Action<redpallas::Signature<SpendAuth>> {
+impl<M: MemoSize> DynamicUsage for Action<redpallas::Signature<SpendAuth>, M> {
     #[inline(always)]
     fn dynamic_usage(&self) -> usize {
         0
@@ -138,6 +139,7 @@ impl DynamicUsage for Action<redpallas::Signature<SpendAuth>> {
 pub(crate) mod testing {
     use rand::{rngs::StdRng, SeedableRng};
     use reddsa::orchard::SpendAuth;
+    use zcash_note_encryption::note_bytes::NoteBytesData;
 
     use proptest::prelude::*;
 
@@ -165,11 +167,11 @@ pub(crate) mod testing {
                 ValueCommitTrapdoor::zero()
             );
             // FIXME: make a real one from the note.
-            let encrypted_note = TransmittedNoteCiphertext {
-                epk_bytes: [0u8; 32],
-                enc_ciphertext: [0u8; 580],
-                out_ciphertext: [0u8; 80]
-            };
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 80],
+            );
             Action {
                 nf,
                 rk,
@@ -197,11 +199,11 @@ pub(crate) mod testing {
             );
 
             // FIXME: make a real one from the note.
-            let encrypted_note = TransmittedNoteCiphertext {
-                epk_bytes: [0u8; 32],
-                enc_ciphertext: [0u8; 580],
-                out_ciphertext: [0u8; 80]
-            };
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 80],
+            );
 
             let rng = StdRng::from_seed(rng_seed);
 
@@ -221,6 +223,7 @@ pub(crate) mod testing {
 mod tests {
     use group::ff::{Field as _, PrimeField as _};
     use pasta_curves::pallas;
+    use zcash_note_encryption::note_bytes::NoteBytesData;
 
     use super::Action;
     use crate::{
@@ -266,11 +269,8 @@ mod tests {
     ) {
         let nf = Nullifier::from_bytes(&[1u8; 32]).unwrap();
         let cmx = ExtractedNoteCommitment::from_bytes(&[2u8; 32]).unwrap();
-        let encrypted_note = TransmittedNoteCiphertext {
-            epk_bytes: [3u8; 32],
-            enc_ciphertext: [4u8; 580],
-            out_ciphertext: [5u8; 80],
-        };
+        let encrypted_note =
+            TransmittedNoteCiphertext::from_parts([3u8; 32], NoteBytesData([4u8; 580]), [5u8; 80]);
         let cv_net = ValueCommitment::derive(ValueSum::from_raw(42), ValueCommitTrapdoor::zero());
         (nf, cmx, encrypted_note, cv_net)
     }
