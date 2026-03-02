@@ -3,7 +3,7 @@ name: Orchard book
 on:
   push:
     branches:
-      - main
+      - dashified
 
 jobs:
   deploy:
