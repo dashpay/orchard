@@ -16,6 +16,7 @@ use crate::{
         FullViewingKey, OutgoingViewingKey, Scope, SpendAuthorizingKey, SpendValidatingKey,
         SpendingKey,
     },
+    memo::{MemoSize, ZcashMemo},
     note::{ExtractedNoteCommitment, Note, Nullifier, Rho, TransmittedNoteCiphertext},
     note_encryption::OrchardNoteEncryption,
     primitives::redpallas::{self, Binding, SpendAuth},
@@ -330,20 +331,20 @@ impl SpendInfo {
 
 /// Information about a specific output to receive funds in an [`Action`].
 #[derive(Debug)]
-pub struct OutputInfo {
+pub struct OutputInfo<M: MemoSize = ZcashMemo> {
     ovk: Option<OutgoingViewingKey>,
     recipient: Address,
     value: NoteValue,
-    memo: [u8; 512],
+    memo: M::Memo,
 }
 
-impl OutputInfo {
+impl<M: MemoSize> OutputInfo<M> {
     /// Constructs a new OutputInfo from its constituent parts.
     pub fn new(
         ovk: Option<OutgoingViewingKey>,
         recipient: Address,
         value: NoteValue,
-        memo: [u8; 512],
+        memo: M::Memo,
     ) -> Self {
         Self {
             ovk,
@@ -360,7 +361,7 @@ impl OutputInfo {
         let fvk: FullViewingKey = (&SpendingKey::random(rng)).into();
         let recipient = fvk.address_at(0u32, Scope::External);
 
-        Self::new(None, recipient, NoteValue::ZERO, [0u8; 512])
+        Self::new(None, recipient, NoteValue::ZERO, M::empty_memo())
     }
 
     /// Builds the output half of an action.
@@ -373,29 +374,31 @@ impl OutputInfo {
         cv_net: &ValueCommitment,
         nf_old: Nullifier,
         mut rng: impl RngCore,
-    ) -> (Note, ExtractedNoteCommitment, TransmittedNoteCiphertext) {
+    ) -> (Note, ExtractedNoteCommitment, TransmittedNoteCiphertext<M>) {
         let rho = Rho::from_nf_old(nf_old);
         let note = Note::new(self.recipient, self.value, rho, &mut rng);
         let cm_new = note.commitment();
         let cmx = cm_new.into();
 
-        let encryptor = OrchardNoteEncryption::new(self.ovk.clone(), note, self.memo);
+        let encryptor = OrchardNoteEncryption::<M>::new(self.ovk.clone(), note, self.memo.clone());
 
-        let encrypted_note = TransmittedNoteCiphertext {
-            epk_bytes: encryptor.epk().to_bytes().0,
-            enc_ciphertext: encryptor.encrypt_note_plaintext(),
-            out_ciphertext: encryptor.encrypt_outgoing_plaintext(cv_net, &cmx, &mut rng),
-        };
+        let encrypted_note = TransmittedNoteCiphertext::from_parts(
+            encryptor.epk().to_bytes().0,
+            encryptor.encrypt_note_plaintext(),
+            encryptor.encrypt_outgoing_plaintext(cv_net, &cmx, &mut rng),
+        );
 
         (note, cmx, encrypted_note)
     }
+}
 
+impl<M: MemoSize> OutputInfo<M> {
     fn into_pczt(
         self,
         cv_net: &ValueCommitment,
         nf_old: Nullifier,
         rng: impl RngCore,
-    ) -> crate::pczt::Output {
+    ) -> crate::pczt::Output<M> {
         let (note, cmx, encrypted_note) = self.build(cv_net, nf_old, rng);
 
         crate::pczt::Output {
@@ -416,14 +419,14 @@ impl OutputInfo {
 
 /// Information about a specific [`Action`] we plan to build.
 #[derive(Debug)]
-struct ActionInfo {
+struct ActionInfo<M: MemoSize = ZcashMemo> {
     spend: SpendInfo,
-    output: OutputInfo,
+    output: OutputInfo<M>,
     rcv: ValueCommitTrapdoor,
 }
 
-impl ActionInfo {
-    fn new(spend: SpendInfo, output: OutputInfo, rng: impl RngCore) -> Self {
+impl<M: MemoSize> ActionInfo<M> {
+    fn new(spend: SpendInfo, output: OutputInfo<M>, rng: impl RngCore) -> Self {
         ActionInfo {
             spend,
             output,
@@ -445,7 +448,7 @@ impl ActionInfo {
     ///
     /// [orchardsend]: https://zips.z.cash/protocol/nu5.pdf#orchardsend
     #[cfg(feature = "circuit")]
-    fn build(self, rng: impl RngCore) -> (Action<SigningMetadata>, Circuit) {
+    fn build(self, rng: impl RngCore) -> (Action<SigningMetadata, M>, Circuit) {
         self.build_for_version(rng, OrchardCircuitVersion::FixedPostNu6_2)
     }
 
@@ -456,7 +459,7 @@ impl ActionInfo {
         self,
         mut rng: impl RngCore,
         circuit_version: OrchardCircuitVersion,
-    ) -> (Action<SigningMetadata>, Circuit) {
+    ) -> (Action<SigningMetadata, M>, Circuit) {
         let v_net = self.value_sum();
         let cv_net = ValueCommitment::derive(v_net, self.rcv.clone());
 
@@ -489,7 +492,7 @@ impl ActionInfo {
         )
     }
 
-    fn build_for_pczt(self, mut rng: impl RngCore) -> crate::pczt::Action {
+    fn build_for_pczt(self, mut rng: impl RngCore) -> crate::pczt::Action<M> {
         let v_net = self.value_sum();
         let cv_net = ValueCommitment::derive(v_net, self.rcv.clone());
 
@@ -509,7 +512,7 @@ impl ActionInfo {
 ///
 /// This is returned by [`Builder::build`].
 #[cfg(feature = "circuit")]
-pub type UnauthorizedBundle<V> = Bundle<InProgress<Unproven, Unauthorized>, V>;
+pub type UnauthorizedBundle<V, M = ZcashMemo> = Bundle<InProgress<Unproven, Unauthorized>, V, M>;
 
 /// Metadata about a bundle created by [`bundle`] or [`Builder::build`] that is not
 /// necessarily recoverable from the bundle itself.
@@ -564,9 +567,9 @@ impl BundleMetadata {
 /// A builder that constructs a [`Bundle`] from a set of notes to be spent, and outputs
 /// to receive funds.
 #[derive(Debug)]
-pub struct Builder {
+pub struct Builder<M: MemoSize = ZcashMemo> {
     spends: Vec<SpendInfo>,
-    outputs: Vec<OutputInfo>,
+    outputs: Vec<OutputInfo<M>>,
     bundle_type: BundleType,
     anchor: Anchor,
     // Only proving (the `circuit` feature) consults the circuit version.
@@ -574,7 +577,7 @@ pub struct Builder {
     circuit_version: OrchardCircuitVersion,
 }
 
-impl Builder {
+impl<M: MemoSize> Builder<M> {
     /// Constructs a new empty builder for an Orchard bundle.
     #[cfg_attr(
         feature = "circuit",
@@ -666,7 +669,7 @@ impl Builder {
         ovk: Option<OutgoingViewingKey>,
         recipient: Address,
         value: NoteValue,
-        memo: [u8; 512],
+        memo: M::Memo,
     ) -> Result<(), OutputError> {
         let flags = self.bundle_type.flags();
         if !flags.outputs_enabled() {
@@ -722,10 +725,11 @@ impl Builder {
     /// The returned bundle will have no proof or signatures; these can be applied with
     /// [`Bundle::create_proof`] and [`Bundle::apply_signatures`] respectively.
     #[cfg(feature = "circuit")]
+    #[allow(clippy::type_complexity)]
     pub fn build<V: TryFrom<i64>>(
         self,
         rng: impl RngCore,
-    ) -> Result<Option<(UnauthorizedBundle<V>, BundleMetadata)>, BuildError> {
+    ) -> Result<Option<(UnauthorizedBundle<V, M>, BundleMetadata)>, BuildError> {
         bundle_for_version(
             rng,
             self.anchor,
@@ -741,10 +745,11 @@ impl Builder {
     pub fn build_for_pczt(
         self,
         rng: impl RngCore,
-    ) -> Result<(crate::pczt::Bundle, BundleMetadata), BuildError> {
+    ) -> Result<(crate::pczt::Bundle<M>, BundleMetadata), BuildError> {
+        let anchor = self.anchor;
         build_bundle(
             rng,
-            self.anchor,
+            anchor,
             self.bundle_type,
             self.spends,
             self.outputs,
@@ -760,7 +765,7 @@ impl Builder {
                         actions,
                         flags,
                         value_sum,
-                        anchor: self.anchor,
+                        anchor,
                         zkproof: None,
                         bsk: None,
                     },
@@ -776,13 +781,14 @@ impl Builder {
 /// The returned bundle will have no proof or signatures; these can be applied with
 /// [`Bundle::create_proof`] and [`Bundle::apply_signatures`] respectively.
 #[cfg(feature = "circuit")]
-pub fn bundle<V: TryFrom<i64>>(
+#[allow(clippy::type_complexity)]
+pub fn bundle<V: TryFrom<i64>, M: MemoSize>(
     rng: impl RngCore,
     anchor: Anchor,
     bundle_type: BundleType,
     spends: Vec<SpendInfo>,
-    outputs: Vec<OutputInfo>,
-) -> Result<Option<(UnauthorizedBundle<V>, BundleMetadata)>, BuildError> {
+    outputs: Vec<OutputInfo<M>>,
+) -> Result<Option<(UnauthorizedBundle<V, M>, BundleMetadata)>, BuildError> {
     bundle_for_version(
         rng,
         anchor,
@@ -803,14 +809,15 @@ pub fn bundle<V: TryFrom<i64>>(
 ///
 /// [`ProvingKey::build_for_version`]: crate::circuit::ProvingKey::build_for_version
 #[cfg(feature = "circuit")]
-pub fn bundle_for_version<V: TryFrom<i64>>(
+#[allow(clippy::type_complexity)]
+pub fn bundle_for_version<V: TryFrom<i64>, M: MemoSize>(
     rng: impl RngCore,
     anchor: Anchor,
     bundle_type: BundleType,
     spends: Vec<SpendInfo>,
-    outputs: Vec<OutputInfo>,
+    outputs: Vec<OutputInfo<M>>,
     circuit_version: OrchardCircuitVersion,
-) -> Result<Option<(UnauthorizedBundle<V>, BundleMetadata)>, BuildError> {
+) -> Result<Option<(UnauthorizedBundle<V, M>, BundleMetadata)>, BuildError> {
     build_bundle(
         rng,
         anchor,
@@ -865,13 +872,19 @@ pub fn bundle_for_version<V: TryFrom<i64>>(
     )
 }
 
-fn build_bundle<B, R: RngCore>(
+fn build_bundle<B, R: RngCore, M: MemoSize>(
     mut rng: R,
     anchor: Anchor,
     bundle_type: BundleType,
     spends: Vec<SpendInfo>,
-    outputs: Vec<OutputInfo>,
-    finisher: impl FnOnce(Vec<ActionInfo>, Flags, ValueSum, BundleMetadata, R) -> Result<B, BuildError>,
+    outputs: Vec<OutputInfo<M>>,
+    finisher: impl FnOnce(
+        Vec<ActionInfo<M>>,
+        Flags,
+        ValueSum,
+        BundleMetadata,
+        R,
+    ) -> Result<B, BuildError>,
 ) -> Result<B, BuildError> {
     let flags = bundle_type.flags();
 
@@ -990,7 +1003,7 @@ impl<S: InProgressSignatures> InProgress<Unproven, S> {
 }
 
 #[cfg(feature = "circuit")]
-impl<S: InProgressSignatures, V> Bundle<InProgress<Unproven, S>, V> {
+impl<S: InProgressSignatures, V, M: MemoSize> Bundle<InProgress<Unproven, S>, V, M> {
     /// The circuit version this bundle's actions were built for, and that its proof must
     /// therefore be created against (with a matching [`ProvingKey`]).
     pub fn circuit_version(&self) -> OrchardCircuitVersion {
@@ -1002,7 +1015,7 @@ impl<S: InProgressSignatures, V> Bundle<InProgress<Unproven, S>, V> {
         self,
         pk: &ProvingKey,
         mut rng: impl RngCore,
-    ) -> Result<Bundle<InProgress<Proof, S>, V>, BuildError> {
+    ) -> Result<Bundle<InProgress<Proof, S>, V, M>, BuildError> {
         let instances: Vec<_> = self
             .actions()
             .iter()
@@ -1085,7 +1098,7 @@ impl MaybeSigned {
     }
 }
 
-impl<P: fmt::Debug, V> Bundle<InProgress<P, Unauthorized>, V> {
+impl<P: fmt::Debug, V, M: MemoSize> Bundle<InProgress<P, Unauthorized>, V, M> {
     /// Loads the sighash into this bundle, preparing it for signing.
     ///
     /// This API ensures that all signatures are created over the same sighash.
@@ -1093,7 +1106,7 @@ impl<P: fmt::Debug, V> Bundle<InProgress<P, Unauthorized>, V> {
         self,
         mut rng: R,
         sighash: [u8; 32],
-    ) -> Bundle<InProgress<P, PartiallyAuthorized>, V> {
+    ) -> Bundle<InProgress<P, PartiallyAuthorized>, V, M> {
         self.map_authorization(
             &mut rng,
             |rng, _, SigningMetadata { dummy_ask, parts }| {
@@ -1114,7 +1127,7 @@ impl<P: fmt::Debug, V> Bundle<InProgress<P, Unauthorized>, V> {
     }
 }
 
-impl<V> Bundle<InProgress<Proof, Unauthorized>, V> {
+impl<V, M: MemoSize> Bundle<InProgress<Proof, Unauthorized>, V, M> {
     /// Applies signatures to this bundle, in order to authorize it.
     ///
     /// This is a helper method that wraps [`Bundle::prepare`], [`Bundle::sign`], and
@@ -1124,7 +1137,7 @@ impl<V> Bundle<InProgress<Proof, Unauthorized>, V> {
         mut rng: R,
         sighash: [u8; 32],
         signing_keys: &[SpendAuthorizingKey],
-    ) -> Result<Bundle<Authorized, V>, BuildError> {
+    ) -> Result<Bundle<Authorized, V, M>, BuildError> {
         signing_keys
             .iter()
             .fold(self.prepare(&mut rng, sighash), |partial, ask| {
@@ -1134,7 +1147,7 @@ impl<V> Bundle<InProgress<Proof, Unauthorized>, V> {
     }
 }
 
-impl<P: fmt::Debug, V> Bundle<InProgress<P, PartiallyAuthorized>, V> {
+impl<P: fmt::Debug, V, M: MemoSize> Bundle<InProgress<P, PartiallyAuthorized>, V, M> {
     /// Signs this bundle with the given [`SpendAuthorizingKey`].
     ///
     /// This will apply signatures for all notes controlled by this spending key.
@@ -1197,11 +1210,11 @@ impl<P: fmt::Debug, V> Bundle<InProgress<P, PartiallyAuthorized>, V> {
     }
 }
 
-impl<V> Bundle<InProgress<Proof, PartiallyAuthorized>, V> {
+impl<V, M: MemoSize> Bundle<InProgress<Proof, PartiallyAuthorized>, V, M> {
     /// Finalizes this bundle, enabling it to be included in a transaction.
     ///
     /// Returns an error if any signatures are missing.
-    pub fn finalize(self) -> Result<Bundle<Authorized, V>, BuildError> {
+    pub fn finalize(self) -> Result<Bundle<Authorized, V, M>, BuildError> {
         self.try_map_authorization(
             &mut (),
             |_, _, maybe| maybe.finalize(),
@@ -1242,7 +1255,7 @@ pub trait OutputView {
     fn value<V: From<u64>>(&self) -> V;
 }
 
-impl OutputView for OutputInfo {
+impl<M: MemoSize> OutputView for OutputInfo<M> {
     fn value<V: From<u64>>(&self) -> V {
         V::from(self.value.inner())
     }

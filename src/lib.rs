@@ -36,6 +36,7 @@ mod constants;
 #[cfg(feature = "unstable-voting-circuits")]
 pub mod constants;
 pub mod keys;
+pub mod memo;
 pub mod note;
 pub mod note_encryption;
 pub mod pczt;
@@ -58,6 +59,7 @@ pub use constants::MERKLE_DEPTH_ORCHARD as NOTE_COMMITMENT_TREE_DEPTH;
 pub use constants::{L_ORCHARD_BASE, L_ORCHARD_SCALAR, L_VALUE};
 pub use note::Note;
 pub use tree::Anchor;
+pub use zcash_note_encryption;
 
 /// A proof of the validity of an Orchard [`Bundle`].
 ///

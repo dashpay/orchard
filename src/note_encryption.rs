@@ -2,12 +2,13 @@
 
 use alloc::vec::Vec;
 use core::fmt;
+use core::marker::PhantomData;
 
 use blake2b_simd::{Hash, Params};
 use group::ff::PrimeField;
 use zcash_note_encryption::{
-    BatchDomain, Domain, EphemeralKeyBytes, NotePlaintextBytes, OutPlaintextBytes,
-    OutgoingCipherKey, ShieldedOutput, COMPACT_NOTE_SIZE, ENC_CIPHERTEXT_SIZE, NOTE_PLAINTEXT_SIZE,
+    note_bytes::{NoteBytes, NoteBytesData},
+    BatchDomain, Domain, EphemeralKeyBytes, OutPlaintextBytes, OutgoingCipherKey, ShieldedOutput,
     OUT_PLAINTEXT_SIZE,
 };
 
@@ -17,6 +18,7 @@ use crate::{
         DiversifiedTransmissionKey, Diversifier, EphemeralPublicKey, EphemeralSecretKey,
         OutgoingViewingKey, PreparedEphemeralPublicKey, PreparedIncomingViewingKey, SharedSecret,
     },
+    memo::{MemoSize, ZcashMemo, COMPACT_NOTE_SIZE},
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
     value::{NoteValue, ValueCommitment},
     Address, Note,
@@ -24,7 +26,7 @@ use crate::{
 
 const PRF_OCK_ORCHARD_PERSONALIZATION: &[u8; 16] = b"Zcash_Orchardock";
 
-/// Defined in [Zcash Protocol Spec § 5.4.2: Pseudo Random Functions][concreteprfs].
+/// Defined in [Zcash Protocol Spec section 5.4.2: Pseudo Random Functions][concreteprfs].
 ///
 /// [concreteprfs]: https://zips.z.cash/protocol/nu5.pdf#concreteprfs
 pub(crate) fn prf_ock_orchard(
@@ -50,7 +52,7 @@ pub(crate) fn prf_ock_orchard(
 }
 
 fn orchard_parse_note_plaintext_without_memo<F>(
-    domain: &OrchardDomain,
+    domain: &OrchardDomainBase,
     plaintext: &[u8],
     get_pk_d: F,
 ) -> Option<(Note, Address)>
@@ -79,42 +81,76 @@ where
     Some((note, recipient))
 }
 
-/// Orchard-specific note encryption logic.
+/// The non-generic core of [`OrchardDomain`].
+///
+/// This holds the protocol-specific state (just `rho`) that is independent of the
+/// memo size parameter `M`.
 #[derive(Debug)]
-pub struct OrchardDomain {
+struct OrchardDomainBase {
     rho: Rho,
 }
 
-impl memuse::DynamicUsage for OrchardDomain {
+/// Orchard-specific note encryption logic.
+///
+/// The type parameter `M` determines the memo size (and thus the note plaintext
+/// and ciphertext sizes). The default is [`ZcashMemo`] (512-byte memos).
+#[derive(Debug)]
+pub struct OrchardDomain<M: MemoSize = ZcashMemo> {
+    base: OrchardDomainBase,
+    _memo: PhantomData<M>,
+}
+
+impl<M: MemoSize> memuse::DynamicUsage for OrchardDomain<M> {
     fn dynamic_usage(&self) -> usize {
-        self.rho.dynamic_usage()
+        self.base.rho.dynamic_usage()
     }
 
     fn dynamic_usage_bounds(&self) -> (usize, Option<usize>) {
-        self.rho.dynamic_usage_bounds()
+        self.base.rho.dynamic_usage_bounds()
     }
 }
 
-impl OrchardDomain {
+impl<M: MemoSize> OrchardDomain<M> {
     /// Constructs a domain that can be used to trial-decrypt this action's output note.
-    pub fn for_action<T>(act: &Action<T>) -> Self {
-        Self { rho: act.rho() }
+    pub fn for_action<T>(act: &Action<T, M>) -> Self {
+        Self {
+            base: OrchardDomainBase { rho: act.rho() },
+            _memo: PhantomData,
+        }
     }
 
-    /// Constructs a domain that can be used to trial-decrypt a PCZT action's output note.
-    pub fn for_pczt_action(act: &crate::pczt::Action) -> Self {
+    /// Constructs a domain from a nullifier (used for PCZT actions).
+    pub fn for_nullifier(nf: Nullifier) -> Self {
         Self {
-            rho: Rho::from_nf_old(act.spend().nullifier),
+            base: OrchardDomainBase {
+                rho: Rho::from_nf_old(nf),
+            },
+            _memo: PhantomData,
         }
     }
 
     /// Constructs a domain that can be used to trial-decrypt this action's output note.
     pub fn for_compact_action(act: &CompactAction) -> Self {
-        Self { rho: act.rho() }
+        Self {
+            base: OrchardDomainBase { rho: act.rho() },
+            _memo: PhantomData,
+        }
     }
 }
 
-impl Domain for OrchardDomain {
+impl OrchardDomain<ZcashMemo> {
+    /// Constructs a domain that can be used to trial-decrypt a PCZT action's output note.
+    pub fn for_pczt_action(act: &crate::pczt::Action) -> Self {
+        Self {
+            base: OrchardDomainBase {
+                rho: Rho::from_nf_old(act.spend().nullifier),
+            },
+            _memo: PhantomData,
+        }
+    }
+}
+
+impl<M: MemoSize> Domain for OrchardDomain<M> {
     type EphemeralSecretKey = EphemeralSecretKey;
     type EphemeralPublicKey = EphemeralPublicKey;
     type PreparedEphemeralPublicKey = PreparedEphemeralPublicKey;
@@ -128,7 +164,12 @@ impl Domain for OrchardDomain {
     type ValueCommitment = ValueCommitment;
     type ExtractedCommitment = ExtractedNoteCommitment;
     type ExtractedCommitmentBytes = [u8; 32];
-    type Memo = [u8; 512]; // TODO use a more interesting type
+    type Memo = M::Memo;
+
+    type NotePlaintextBytes = M::NotePlaintextBytes;
+    type NoteCiphertextBytes = M::NoteCiphertextBytes;
+    type CompactNotePlaintextBytes = NoteBytesData<COMPACT_NOTE_SIZE>;
+    type CompactNoteCiphertextBytes = NoteBytesData<COMPACT_NOTE_SIZE>;
 
     fn derive_esk(note: &Self::Note) -> Option<Self::EphemeralSecretKey> {
         Some(note.esk())
@@ -167,14 +208,18 @@ impl Domain for OrchardDomain {
         secret.kdf_orchard(ephemeral_key)
     }
 
-    fn note_plaintext_bytes(note: &Self::Note, memo: &Self::Memo) -> NotePlaintextBytes {
-        let mut np = [0; NOTE_PLAINTEXT_SIZE];
+    fn note_plaintext_bytes(note: &Self::Note, memo: &Self::Memo) -> Self::NotePlaintextBytes {
+        let mut np = [0u8; COMPACT_NOTE_SIZE];
         np[0] = 0x02;
         np[1..12].copy_from_slice(note.recipient().diversifier().as_array());
         np[12..20].copy_from_slice(&note.value().to_bytes());
-        np[20..52].copy_from_slice(note.rseed().as_bytes());
-        np[52..].copy_from_slice(memo);
-        NotePlaintextBytes(np)
+        np[20..COMPACT_NOTE_SIZE].copy_from_slice(note.rseed().as_bytes());
+
+        let mut buf = alloc::vec![0u8; COMPACT_NOTE_SIZE + memo.as_ref().len()];
+        buf[..COMPACT_NOTE_SIZE].copy_from_slice(&np);
+        buf[COMPACT_NOTE_SIZE..].copy_from_slice(memo.as_ref());
+
+        Self::NotePlaintextBytes::from_slice(&buf).expect("memo size is consistent with M")
     }
 
     fn derive_ock(
@@ -211,9 +256,9 @@ impl Domain for OrchardDomain {
     fn parse_note_plaintext_without_memo_ivk(
         &self,
         ivk: &Self::IncomingViewingKey,
-        plaintext: &[u8],
+        plaintext: &Self::CompactNotePlaintextBytes,
     ) -> Option<(Self::Note, Self::Recipient)> {
-        orchard_parse_note_plaintext_without_memo(self, plaintext, |diversifier| {
+        orchard_parse_note_plaintext_without_memo(&self.base, plaintext.as_ref(), |diversifier| {
             DiversifiedTransmissionKey::derive(ivk, diversifier)
         })
     }
@@ -221,15 +266,22 @@ impl Domain for OrchardDomain {
     fn parse_note_plaintext_without_memo_ovk(
         &self,
         pk_d: &Self::DiversifiedTransmissionKey,
-        plaintext: &NotePlaintextBytes,
+        plaintext: &Self::CompactNotePlaintextBytes,
     ) -> Option<(Self::Note, Self::Recipient)> {
-        orchard_parse_note_plaintext_without_memo(self, &plaintext.0, |_| *pk_d)
+        orchard_parse_note_plaintext_without_memo(&self.base, plaintext.as_ref(), |_| *pk_d)
     }
 
-    fn extract_memo(&self, plaintext: &NotePlaintextBytes) -> Self::Memo {
-        plaintext.0[COMPACT_NOTE_SIZE..NOTE_PLAINTEXT_SIZE]
-            .try_into()
-            .unwrap()
+    fn split_plaintext_at_memo(
+        &self,
+        plaintext: &Self::NotePlaintextBytes,
+    ) -> Option<(Self::CompactNotePlaintextBytes, Self::Memo)> {
+        let bytes = plaintext.as_ref();
+        if bytes.len() < COMPACT_NOTE_SIZE {
+            return None;
+        }
+        let compact = NoteBytesData::<COMPACT_NOTE_SIZE>::from_slice(&bytes[..COMPACT_NOTE_SIZE])?;
+        let memo = M::memo_from_bytes(&bytes[COMPACT_NOTE_SIZE..])?;
+        Some((compact, memo))
     }
 
     fn extract_pk_d(out_plaintext: &OutPlaintextBytes) -> Option<Self::DiversifiedTransmissionKey> {
@@ -242,7 +294,7 @@ impl Domain for OrchardDomain {
     }
 }
 
-impl BatchDomain for OrchardDomain {
+impl<M: MemoSize> BatchDomain for OrchardDomain<M> {
     fn batch_kdf<'a>(
         items: impl Iterator<Item = (Option<Self::SharedSecret>, &'a EphemeralKeyBytes)>,
     ) -> Vec<Option<Self::SymmetricKey>> {
@@ -258,33 +310,48 @@ impl BatchDomain for OrchardDomain {
 }
 
 /// Implementation of in-band secret distribution for Orchard bundles.
-pub type OrchardNoteEncryption = zcash_note_encryption::NoteEncryption<OrchardDomain>;
+pub type OrchardNoteEncryption<M = ZcashMemo> =
+    zcash_note_encryption::NoteEncryption<OrchardDomain<M>>;
 
-impl<T> ShieldedOutput<OrchardDomain, ENC_CIPHERTEXT_SIZE> for Action<T> {
+impl<T, M: MemoSize> ShieldedOutput<OrchardDomain<M>> for Action<T, M> {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.encrypted_note().epk_bytes)
     }
 
-    fn cmstar_bytes(&self) -> [u8; 32] {
-        self.cmx().to_bytes()
+    fn cmstar(&self) -> &ExtractedNoteCommitment {
+        self.cmx()
     }
 
-    fn enc_ciphertext(&self) -> &[u8; ENC_CIPHERTEXT_SIZE] {
-        &self.encrypted_note().enc_ciphertext
+    fn enc_ciphertext(&self) -> Option<&M::NoteCiphertextBytes> {
+        Some(&self.encrypted_note().enc_ciphertext)
+    }
+
+    fn enc_ciphertext_compact(&self) -> NoteBytesData<COMPACT_NOTE_SIZE> {
+        NoteBytesData::<COMPACT_NOTE_SIZE>::from_slice(
+            &self.encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE],
+        )
+        .expect("enc_ciphertext is at least COMPACT_NOTE_SIZE bytes")
     }
 }
 
-impl ShieldedOutput<OrchardDomain, ENC_CIPHERTEXT_SIZE> for crate::pczt::Action {
+impl ShieldedOutput<OrchardDomain<ZcashMemo>> for crate::pczt::Action {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.output().encrypted_note().epk_bytes)
     }
 
-    fn cmstar_bytes(&self) -> [u8; 32] {
-        self.output().cmx().to_bytes()
+    fn cmstar(&self) -> &ExtractedNoteCommitment {
+        self.output().cmx()
     }
 
-    fn enc_ciphertext(&self) -> &[u8; ENC_CIPHERTEXT_SIZE] {
-        &self.output().encrypted_note().enc_ciphertext
+    fn enc_ciphertext(&self) -> Option<&<ZcashMemo as MemoSize>::NoteCiphertextBytes> {
+        Some(&self.output().encrypted_note().enc_ciphertext)
+    }
+
+    fn enc_ciphertext_compact(&self) -> NoteBytesData<COMPACT_NOTE_SIZE> {
+        NoteBytesData::<COMPACT_NOTE_SIZE>::from_slice(
+            &self.output().encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE],
+        )
+        .expect("enc_ciphertext is at least COMPACT_NOTE_SIZE bytes")
     }
 }
 
@@ -294,7 +361,7 @@ pub struct CompactAction {
     nullifier: Nullifier,
     cmx: ExtractedNoteCommitment,
     ephemeral_key: EphemeralKeyBytes,
-    enc_ciphertext: [u8; 52],
+    enc_ciphertext: [u8; COMPACT_NOTE_SIZE],
 }
 
 impl fmt::Debug for CompactAction {
@@ -303,30 +370,34 @@ impl fmt::Debug for CompactAction {
     }
 }
 
-impl<T> From<&Action<T>> for CompactAction {
-    fn from(action: &Action<T>) -> Self {
+impl<T, M: MemoSize> From<&Action<T, M>> for CompactAction {
+    fn from(action: &Action<T, M>) -> Self {
         CompactAction {
             nullifier: *action.nullifier(),
             cmx: *action.cmx(),
             ephemeral_key: action.ephemeral_key(),
-            enc_ciphertext: action.encrypted_note().enc_ciphertext[..52]
+            enc_ciphertext: action.encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE]
                 .try_into()
                 .unwrap(),
         }
     }
 }
 
-impl ShieldedOutput<OrchardDomain, COMPACT_NOTE_SIZE> for CompactAction {
+impl<M: MemoSize> ShieldedOutput<OrchardDomain<M>> for CompactAction {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.ephemeral_key.0)
     }
 
-    fn cmstar_bytes(&self) -> [u8; 32] {
-        self.cmx.to_bytes()
+    fn cmstar(&self) -> &ExtractedNoteCommitment {
+        &self.cmx
     }
 
-    fn enc_ciphertext(&self) -> &[u8; COMPACT_NOTE_SIZE] {
-        &self.enc_ciphertext
+    fn enc_ciphertext(&self) -> Option<&M::NoteCiphertextBytes> {
+        None
+    }
+
+    fn enc_ciphertext_compact(&self) -> NoteBytesData<COMPACT_NOTE_SIZE> {
+        NoteBytesData(self.enc_ciphertext)
     }
 }
 
@@ -336,7 +407,7 @@ impl CompactAction {
         nullifier: Nullifier,
         cmx: ExtractedNoteCommitment,
         ephemeral_key: EphemeralKeyBytes,
-        enc_ciphertext: [u8; 52],
+        enc_ciphertext: [u8; COMPACT_NOTE_SIZE],
     ) -> Self {
         Self {
             nullifier,
@@ -370,6 +441,7 @@ pub mod testing {
 
     use crate::{
         keys::OutgoingViewingKey,
+        memo::ZcashMemo,
         note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
         value::NoteValue,
         Address, Note,
@@ -399,9 +471,9 @@ pub mod testing {
             }
         };
         let note = Note::from_parts(recipient, value, rho, rseed).unwrap();
-        let encryptor = OrchardNoteEncryption::new(ovk, note, [0u8; 512]);
+        let encryptor = OrchardNoteEncryption::<ZcashMemo>::new(ovk, note, [0u8; 512]);
         let cmx = ExtractedNoteCommitment::from(note.commitment());
-        let ephemeral_key = OrchardDomain::epk_bytes(encryptor.epk());
+        let ephemeral_key = OrchardDomain::<ZcashMemo>::epk_bytes(encryptor.epk());
         let enc_ciphertext = encryptor.encrypt_note_plaintext();
 
         (
@@ -420,8 +492,8 @@ pub mod testing {
 mod tests {
     use rand::rngs::OsRng;
     use zcash_note_encryption::{
-        try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
-        EphemeralKeyBytes,
+        note_bytes::NoteBytesData, try_compact_note_decryption, try_note_decryption,
+        try_output_recovery_with_ovk, EphemeralKeyBytes,
     };
 
     use super::{prf_ock_orchard, CompactAction, OrchardDomain, OrchardNoteEncryption};
@@ -431,6 +503,7 @@ mod tests {
             DiversifiedTransmissionKey, Diversifier, EphemeralSecretKey, IncomingViewingKey,
             OutgoingViewingKey, PreparedIncomingViewingKey,
         },
+        memo::ZcashMemo,
         note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
         primitives::redpallas,
         value::{NoteValue, ValueCommitment},
@@ -484,17 +557,17 @@ mod tests {
             let note = Note::from_parts(recipient, value, rho, rseed).unwrap();
             assert_eq!(ExtractedNoteCommitment::from(note.commitment()), cmx);
 
-            let action = Action::from_parts(
+            let action: Action<(), ZcashMemo> = Action::from_parts(
                 // nf_old is the nullifier revealed by the receiving Action.
                 nf_old,
                 // We don't need a real rk for this test.
                 redpallas::VerificationKey::dummy(),
                 cmx,
-                TransmittedNoteCiphertext {
-                    epk_bytes: ephemeral_key.0,
-                    enc_ciphertext: tv.c_enc,
-                    out_ciphertext: tv.c_out,
-                },
+                TransmittedNoteCiphertext::from_parts(
+                    ephemeral_key.0,
+                    NoteBytesData(tv.c_enc),
+                    tv.c_out,
+                ),
                 cv_net.clone(),
                 (),
             )
@@ -505,7 +578,7 @@ mod tests {
             // (Tested first because it only requires immutable references.)
             //
 
-            let domain = OrchardDomain { rho };
+            let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
 
             match try_note_decryption(&domain, &ivk, &action) {
                 Some((decrypted_note, decrypted_to, decrypted_memo)) => {
@@ -537,7 +610,8 @@ mod tests {
             // Test encryption
             //
 
-            let ne = OrchardNoteEncryption::new_with_esk(esk, Some(ovk), note, tv.memo);
+            let ne =
+                OrchardNoteEncryption::<ZcashMemo>::new_with_esk(esk, Some(ovk), note, tv.memo);
 
             assert_eq!(ne.encrypt_note_plaintext().as_ref(), &tv.c_enc[..]);
             assert_eq!(

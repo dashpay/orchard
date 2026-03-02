@@ -23,6 +23,7 @@ use crate::{
     address::Address,
     bundle::commitments::{hash_bundle_auth_data, hash_bundle_txid_data},
     keys::{IncomingViewingKey, OutgoingViewingKey, PreparedIncomingViewingKey},
+    memo::{MemoSize, ZcashMemo},
     note::Note,
     note_encryption::OrchardDomain,
     primitives::redpallas::{self, Binding, SpendAuth},
@@ -35,7 +36,7 @@ use crate::{
 use crate::circuit::{Instance, VerifyingKey};
 
 #[cfg(feature = "circuit")]
-impl<T> Action<T> {
+impl<T, M: MemoSize> Action<T, M> {
     /// Prepares the public instance for this action, for creating and verifying the
     /// bundle proof.
     pub fn to_instance(&self, flags: Flags, anchor: Anchor) -> Instance {
@@ -160,9 +161,9 @@ pub trait Authorization: fmt::Debug {
 
 /// A bundle of actions to be applied to the ledger.
 #[derive(Clone)]
-pub struct Bundle<T: Authorization, V> {
+pub struct Bundle<T: Authorization, V, M: MemoSize = ZcashMemo> {
     /// The list of actions that make up this bundle.
-    actions: NonEmpty<Action<T::SpendAuth>>,
+    actions: NonEmpty<Action<T::SpendAuth, M>>,
     /// Orchard-specific transaction-level flags for this bundle.
     flags: Flags,
     /// The net value moved out of the Orchard shielded pool.
@@ -175,11 +176,11 @@ pub struct Bundle<T: Authorization, V> {
     authorization: T,
 }
 
-impl<T: Authorization, V: fmt::Debug> fmt::Debug for Bundle<T, V> {
+impl<T: Authorization, V: fmt::Debug, M: MemoSize> fmt::Debug for Bundle<T, V, M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         /// Helper struct for debug-printing actions without exposing `NonEmpty`.
-        struct Actions<'a, T>(&'a NonEmpty<Action<T>>);
-        impl<T: fmt::Debug> fmt::Debug for Actions<'_, T> {
+        struct Actions<'a, T, M: MemoSize>(&'a NonEmpty<Action<T, M>>);
+        impl<T: fmt::Debug, M: MemoSize> fmt::Debug for Actions<'_, T, M> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_list().entries(self.0.iter()).finish()
             }
@@ -210,7 +211,7 @@ pub(crate) fn validate_proof_size(proof: &Proof, num_actions: usize) -> Result<(
     }
 }
 
-impl<T: Authorization, V> Bundle<T, V> {
+impl<T: Authorization, V, M: MemoSize> Bundle<T, V, M> {
     /// Constructs a `Bundle` from its constituent parts without validating the authorization.
     ///
     /// This does not check the proof size, so it must only be used with an authorization that
@@ -218,7 +219,7 @@ impl<T: Authorization, V> Bundle<T, V> {
     /// one produced by [`Proof::create`]). Construction from untrusted parts must instead go
     /// through a checked, authorization-specific constructor such as [`Bundle::try_from_parts`].
     pub(crate) fn from_parts_unchecked(
-        actions: NonEmpty<Action<T::SpendAuth>>,
+        actions: NonEmpty<Action<T::SpendAuth, M>>,
         flags: Flags,
         value_balance: V,
         anchor: Anchor,
@@ -234,7 +235,7 @@ impl<T: Authorization, V> Bundle<T, V> {
     }
 
     /// Returns the list of actions that make up this bundle.
-    pub fn actions(&self) -> &NonEmpty<Action<T::SpendAuth>> {
+    pub fn actions(&self) -> &NonEmpty<Action<T::SpendAuth, M>> {
         &self.actions
     }
 
@@ -267,7 +268,7 @@ impl<T: Authorization, V> Bundle<T, V> {
     pub fn try_map_value_balance<V0, E, F: FnOnce(V) -> Result<V0, E>>(
         self,
         f: F,
-    ) -> Result<Bundle<T, V0>, E> {
+    ) -> Result<Bundle<T, V0, M>, E> {
         Ok(Bundle {
             actions: self.actions,
             flags: self.flags,
@@ -283,7 +284,7 @@ impl<T: Authorization, V> Bundle<T, V> {
         context: &mut R,
         mut spend_auth: impl FnMut(&mut R, &T, T::SpendAuth) -> U::SpendAuth,
         step: impl FnOnce(&mut R, T) -> U,
-    ) -> Bundle<U, V> {
+    ) -> Bundle<U, V, M> {
         let authorization = self.authorization;
         Bundle {
             actions: self
@@ -302,7 +303,7 @@ impl<T: Authorization, V> Bundle<T, V> {
         context: &mut R,
         mut spend_auth: impl FnMut(&mut R, &T, T::SpendAuth) -> Result<U::SpendAuth, E>,
         step: impl FnOnce(&mut R, T) -> Result<U, E>,
-    ) -> Result<Bundle<U, V>, E> {
+    ) -> Result<Bundle<U, V, M>, E> {
         let authorization = self.authorization;
         let new_actions = self
             .actions
@@ -334,7 +335,7 @@ impl<T: Authorization, V> Bundle<T, V> {
     pub fn decrypt_outputs_with_keys(
         &self,
         keys: &[IncomingViewingKey],
-    ) -> Vec<(usize, IncomingViewingKey, Note, Address, [u8; 512])> {
+    ) -> Vec<(usize, IncomingViewingKey, Note, Address, M::Memo)> {
         let prepared_keys: Vec<_> = keys
             .iter()
             .map(|ivk| (ivk, PreparedIncomingViewingKey::new(ivk)))
@@ -343,7 +344,7 @@ impl<T: Authorization, V> Bundle<T, V> {
             .iter()
             .enumerate()
             .filter_map(|(idx, action)| {
-                let domain = OrchardDomain::for_action(action);
+                let domain = OrchardDomain::<M>::for_action(action);
                 prepared_keys.iter().find_map(|(ivk, prepared_ivk)| {
                     try_note_decryption(&domain, prepared_ivk, action)
                         .map(|(n, a, m)| (idx, (*ivk).clone(), n, a, m))
@@ -359,10 +360,10 @@ impl<T: Authorization, V> Bundle<T, V> {
         &self,
         action_idx: usize,
         key: &IncomingViewingKey,
-    ) -> Option<(Note, Address, [u8; 512])> {
+    ) -> Option<(Note, Address, M::Memo)> {
         let prepared_ivk = PreparedIncomingViewingKey::new(key);
         self.actions.get(action_idx).and_then(move |action| {
-            let domain = OrchardDomain::for_action(action);
+            let domain = OrchardDomain::<M>::for_action(action);
             try_note_decryption(&domain, &prepared_ivk, action)
         })
     }
@@ -374,12 +375,12 @@ impl<T: Authorization, V> Bundle<T, V> {
     pub fn recover_outputs_with_ovks(
         &self,
         keys: &[OutgoingViewingKey],
-    ) -> Vec<(usize, OutgoingViewingKey, Note, Address, [u8; 512])> {
+    ) -> Vec<(usize, OutgoingViewingKey, Note, Address, M::Memo)> {
         self.actions
             .iter()
             .enumerate()
             .filter_map(|(idx, action)| {
-                let domain = OrchardDomain::for_action(action);
+                let domain = OrchardDomain::<M>::for_action(action);
                 keys.iter().find_map(move |key| {
                     try_output_recovery_with_ovk(
                         &domain,
@@ -401,9 +402,9 @@ impl<T: Authorization, V> Bundle<T, V> {
         &self,
         action_idx: usize,
         key: &OutgoingViewingKey,
-    ) -> Option<(Note, Address, [u8; 512])> {
+    ) -> Option<(Note, Address, M::Memo)> {
         self.actions.get(action_idx).and_then(move |action| {
-            let domain = OrchardDomain::for_action(action);
+            let domain = OrchardDomain::<M>::for_action(action);
             try_output_recovery_with_ovk(
                 &domain,
                 key,
@@ -415,7 +416,7 @@ impl<T: Authorization, V> Bundle<T, V> {
     }
 }
 
-impl<T: Authorization, V: Copy + Into<i64>> Bundle<T, V> {
+impl<T: Authorization, V: Copy + Into<i64>, M: MemoSize> Bundle<T, V, M> {
     /// Computes a commitment to the effects of this bundle, suitable for inclusion within
     /// a transaction ID.
     pub fn commitment(&self) -> BundleCommitment {
@@ -536,7 +537,7 @@ pub enum ProofSizeEnforcement {
     Strict,
 }
 
-impl<V> Bundle<Authorized, V> {
+impl<V, M: MemoSize> Bundle<Authorized, V, M> {
     /// Constructs an authorized `Bundle` from its constituent parts, rejecting a proof whose
     /// length is not the canonical size for the number of actions.
     ///
@@ -547,7 +548,7 @@ impl<V> Bundle<Authorized, V> {
     /// arbitrary data, which would otherwise impose unbounded bandwidth and storage costs without
     /// affecting proof validity (GHSA-2x4w-pxqw-58v9).
     pub fn try_from_parts(
-        actions: NonEmpty<Action<<Authorized as Authorization>::SpendAuth>>,
+        actions: NonEmpty<Action<<Authorized as Authorization>::SpendAuth, M>>,
         flags: Flags,
         value_balance: V,
         anchor: Anchor,
@@ -583,7 +584,7 @@ impl<V> Bundle<Authorized, V> {
 }
 
 #[cfg(feature = "std")]
-impl<V: DynamicUsage> DynamicUsage for Bundle<Authorized, V> {
+impl<V: DynamicUsage, M: MemoSize> DynamicUsage for Bundle<Authorized, V, M> {
     fn dynamic_usage(&self) -> usize {
         self.actions.tail.dynamic_usage()
             + self.value_balance.dynamic_usage()

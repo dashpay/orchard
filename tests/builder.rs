@@ -6,6 +6,7 @@ use orchard::{
     bundle::{Authorized, Flags},
     circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
     keys::{FullViewingKey, PreparedIncomingViewingKey, Scope, SpendAuthorizingKey, SpendingKey},
+    memo::ZcashMemo,
     note::ExtractedNoteCommitment,
     note_encryption::OrchardDomain,
     tree::MerkleHashOrchard,
@@ -144,7 +145,7 @@ fn builder_builds_for_insecure_circuit_version() {
     let recipient = fvk.address_at(0u32, Scope::External);
 
     let anchor = MerkleHashOrchard::empty_root(32.into()).into();
-    let mut builder = Builder::new_for_version(
+    let mut builder = Builder::<ZcashMemo>::new_for_version(
         BundleType::Transactional {
             flags: Flags::SPENDS_DISABLED,
             bundle_required: false,
