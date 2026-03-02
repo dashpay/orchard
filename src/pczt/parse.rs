@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use ff::PrimeField;
 use incrementalmerkletree::Hashable;
 use pasta_curves::pallas;
+use zcash_note_encryption::note_bytes::NoteBytes;
 use zcash_note_encryption::OutgoingCipherKey;
 use zip32::ChildIndex;
 
@@ -14,6 +15,7 @@ use super::{Action, Bundle, Output, Spend, Zip32Derivation};
 use crate::{
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
+    memo::MemoSize,
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, SpendAuth},
     tree::{MerkleHashOrchard, MerklePath},
@@ -21,11 +23,11 @@ use crate::{
     Address, Anchor, Proof, NOTE_COMMITMENT_TREE_DEPTH,
 };
 
-impl Bundle {
+impl<M: MemoSize> Bundle<M> {
     /// Parses a PCZT bundle from its component parts.
     /// `value_sum` is represented as `(magnitude, is_negative)`.
     pub fn parse(
-        actions: Vec<Action>,
+        actions: Vec<Action<M>>,
         flags: u8,
         value_sum: (u64, bool),
         anchor: [u8; 32],
@@ -68,12 +70,12 @@ impl Bundle {
     }
 }
 
-impl Action {
+impl<M: MemoSize> Action<M> {
     /// Parses a PCZT action from its component parts.
     pub fn parse(
         cv_net: [u8; 32],
         spend: Spend,
-        output: Output,
+        output: Output<M>,
         rcv: Option<[u8; 32]>,
     ) -> Result<Self, ParseError> {
         let cv_net = ValueCommitment::from_bytes(&cv_net)
@@ -205,7 +207,7 @@ impl Spend {
     }
 }
 
-impl Output {
+impl<M: MemoSize> Output<M> {
     /// Parses a PCZT output from its component parts, and the corresponding `Spend`'s
     /// nullifier.
     #[allow(clippy::too_many_arguments)]
@@ -227,17 +229,17 @@ impl Output {
             .into_option()
             .ok_or(ParseError::InvalidExtractedNoteCommitment)?;
 
-        let encrypted_note = TransmittedNoteCiphertext {
-            epk_bytes: ephemeral_key,
-            enc_ciphertext: enc_ciphertext
-                .as_slice()
-                .try_into()
-                .map_err(|_| ParseError::InvalidEncCiphertext)?,
-            out_ciphertext: out_ciphertext
-                .as_slice()
-                .try_into()
-                .map_err(|_| ParseError::InvalidOutCiphertext)?,
-        };
+        let enc_ciphertext_bytes = NoteBytes::from_slice(enc_ciphertext.as_slice())
+            .ok_or(ParseError::InvalidEncCiphertext)?;
+        let out_ciphertext_bytes: [u8; 80] = out_ciphertext
+            .as_slice()
+            .try_into()
+            .map_err(|_| ParseError::InvalidOutCiphertext)?;
+        let encrypted_note = TransmittedNoteCiphertext::from_parts(
+            ephemeral_key,
+            enc_ciphertext_bytes,
+            out_ciphertext_bytes,
+        );
 
         let recipient = recipient
             .as_ref()

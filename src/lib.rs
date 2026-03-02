@@ -33,6 +33,7 @@ pub mod bundle;
 pub mod circuit;
 mod constants;
 pub mod keys;
+pub mod memo;
 pub mod note;
 pub mod note_encryption;
 pub mod pczt;
@@ -51,6 +52,7 @@ pub use bundle::Bundle;
 pub use constants::MERKLE_DEPTH_ORCHARD as NOTE_COMMITMENT_TREE_DEPTH;
 pub use note::Note;
 pub use tree::Anchor;
+pub use zcash_note_encryption;
 
 /// A proof of the validity of an Orchard [`Bundle`].
 ///

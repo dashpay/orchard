@@ -3,13 +3,15 @@ use core::fmt;
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use crate::memo::MemoSize;
+
 use super::{Action, Bundle, Zip32Derivation};
 
-impl Bundle {
+impl<M: MemoSize> Bundle<M> {
     /// Updates the bundle with information provided in the given closure.
     pub fn update_with<F>(&mut self, f: F) -> Result<(), UpdaterError>
     where
-        F: FnOnce(Updater<'_>) -> Result<(), UpdaterError>,
+        F: FnOnce(Updater<'_, M>) -> Result<(), UpdaterError>,
     {
         f(Updater(self))
     }
@@ -17,11 +19,11 @@ impl Bundle {
 
 /// An updater for an Orchard PCZT bundle.
 #[derive(Debug)]
-pub struct Updater<'a>(&'a mut Bundle);
+pub struct Updater<'a, M: MemoSize>(&'a mut Bundle<M>);
 
-impl Updater<'_> {
+impl<M: MemoSize> Updater<'_, M> {
     /// Provides read access to the bundle being updated.
-    pub fn bundle(&self) -> &Bundle {
+    pub fn bundle(&self) -> &Bundle<M> {
         self.0
     }
 
@@ -29,7 +31,7 @@ impl Updater<'_> {
     /// closure.
     pub fn update_action_with<F>(&mut self, index: usize, f: F) -> Result<(), UpdaterError>
     where
-        F: FnOnce(ActionUpdater<'_>) -> Result<(), UpdaterError>,
+        F: FnOnce(ActionUpdater<'_, M>) -> Result<(), UpdaterError>,
     {
         f(ActionUpdater(
             self.0
@@ -42,9 +44,9 @@ impl Updater<'_> {
 
 /// An updater for an Orchard PCZT action.
 #[derive(Debug)]
-pub struct ActionUpdater<'a>(&'a mut Action);
+pub struct ActionUpdater<'a, M: MemoSize>(&'a mut Action<M>);
 
-impl ActionUpdater<'_> {
+impl<M: MemoSize> ActionUpdater<'_, M> {
     /// Sets the ZIP 32 derivation path for the spent note's signing key.
     pub fn set_spend_zip32_derivation(&mut self, derivation: Zip32Derivation) {
         self.0.spend.zip32_derivation = Some(derivation);

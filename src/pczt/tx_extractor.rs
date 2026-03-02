@@ -6,11 +6,12 @@ use rand::{CryptoRng, RngCore};
 use super::Action;
 use crate::{
     bundle::{Authorization, Authorized, EffectsOnly},
+    memo::MemoSize,
     primitives::redpallas::{self, Binding, SpendAuth},
     Proof,
 };
 
-impl super::Bundle {
+impl<M: MemoSize> super::Bundle<M> {
     /// Extracts the effects of this PCZT bundle as a [regular `Bundle`].
     ///
     /// This is used by the Signer role to produce the transaction sighash.
@@ -18,7 +19,7 @@ impl super::Bundle {
     /// [regular `Bundle`]: crate::Bundle
     pub fn extract_effects<V: TryFrom<i64>>(
         &self,
-    ) -> Result<Option<crate::Bundle<EffectsOnly, V>>, TxExtractorError> {
+    ) -> Result<Option<crate::Bundle<EffectsOnly, V, M>>, TxExtractorError> {
         self.to_tx_data(|_| Ok(()), |_| Ok(EffectsOnly))
     }
 
@@ -29,7 +30,7 @@ impl super::Bundle {
     /// [regular `Bundle`]: crate::Bundle
     pub fn extract<V: TryFrom<i64>>(
         self,
-    ) -> Result<Option<crate::Bundle<Unbound, V>>, TxExtractorError> {
+    ) -> Result<Option<crate::Bundle<Unbound, V, M>>, TxExtractorError> {
         self.to_tx_data(
             |action| {
                 action
@@ -58,11 +59,11 @@ impl super::Bundle {
         &self,
         action_auth: F,
         bundle_auth: G,
-    ) -> Result<Option<crate::Bundle<A, V>>, E>
+    ) -> Result<Option<crate::Bundle<A, V, M>>, E>
     where
         A: Authorization,
         E: From<TxExtractorError>,
-        F: Fn(&Action) -> Result<<A as Authorization>::SpendAuth, E>,
+        F: Fn(&Action<M>) -> Result<<A as Authorization>::SpendAuth, E>,
         G: FnOnce(&Self) -> Result<A, E>,
         V: TryFrom<i64>,
     {
@@ -153,7 +154,7 @@ impl Authorization for Unbound {
     type SpendAuth = redpallas::Signature<SpendAuth>;
 }
 
-impl<V> crate::Bundle<Unbound, V> {
+impl<V, M: MemoSize> crate::Bundle<Unbound, V, M> {
     /// Verifies the given sighash with every `spend_auth_sig`, and then binds the bundle.
     ///
     /// Returns `None` if the given sighash does not validate against every `spend_auth_sig`.
@@ -161,7 +162,7 @@ impl<V> crate::Bundle<Unbound, V> {
         self,
         sighash: [u8; 32],
         rng: R,
-    ) -> Option<crate::Bundle<Authorized, V>> {
+    ) -> Option<crate::Bundle<Authorized, V, M>> {
         if self
             .actions()
             .iter()

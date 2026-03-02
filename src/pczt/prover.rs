@@ -8,11 +8,12 @@ use rand::{CryptoRng, RngCore};
 use crate::{
     builder::SpendInfo,
     circuit::{Circuit, Instance, ProvingKey},
+    memo::MemoSize,
     note::Rho,
     Note, Proof,
 };
 
-impl super::Bundle {
+impl<M: MemoSize> super::Bundle<M> {
     /// Adds a proof to this PCZT bundle.
     pub fn create_proof<R: RngCore + CryptoRng>(
         &mut self,

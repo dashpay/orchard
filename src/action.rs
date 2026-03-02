@@ -1,6 +1,7 @@
 use memuse::DynamicUsage;
 
 use crate::{
+    memo::{MemoSize, ZcashMemo},
     note::{ExtractedNoteCommitment, Nullifier, Rho, TransmittedNoteCiphertext},
     primitives::redpallas::{self, SpendAuth},
     value::ValueCommitment,
@@ -11,7 +12,7 @@ use crate::{
 /// This both creates a note (adding a commitment to the global ledger), and consumes
 /// some note created prior to this action (adding a nullifier to the global ledger).
 #[derive(Debug, Clone)]
-pub struct Action<A> {
+pub struct Action<A, M: MemoSize = ZcashMemo> {
     /// The nullifier of the note being spent.
     nf: Nullifier,
     /// The randomized verification key for the note being spent.
@@ -19,20 +20,20 @@ pub struct Action<A> {
     /// A commitment to the new note being created.
     cmx: ExtractedNoteCommitment,
     /// The transmitted note ciphertext.
-    encrypted_note: TransmittedNoteCiphertext,
+    encrypted_note: TransmittedNoteCiphertext<M>,
     /// A commitment to the net value created or consumed by this action.
     cv_net: ValueCommitment,
     /// The authorization for this action.
     authorization: A,
 }
 
-impl<T> Action<T> {
+impl<T, M: MemoSize> Action<T, M> {
     /// Constructs an `Action` from its constituent parts.
     pub fn from_parts(
         nf: Nullifier,
         rk: redpallas::VerificationKey<SpendAuth>,
         cmx: ExtractedNoteCommitment,
-        encrypted_note: TransmittedNoteCiphertext,
+        encrypted_note: TransmittedNoteCiphertext<M>,
         cv_net: ValueCommitment,
         authorization: T,
     ) -> Self {
@@ -62,7 +63,7 @@ impl<T> Action<T> {
     }
 
     /// Returns the encrypted note ciphertext.
-    pub fn encrypted_note(&self) -> &TransmittedNoteCiphertext {
+    pub fn encrypted_note(&self) -> &TransmittedNoteCiphertext<M> {
         &self.encrypted_note
     }
 
@@ -82,7 +83,7 @@ impl<T> Action<T> {
     }
 
     /// Transitions this action from one authorization state to another.
-    pub fn map<U>(self, step: impl FnOnce(T) -> U) -> Action<U> {
+    pub fn map<U>(self, step: impl FnOnce(T) -> U) -> Action<U, M> {
         Action {
             nf: self.nf,
             rk: self.rk,
@@ -94,7 +95,7 @@ impl<T> Action<T> {
     }
 
     /// Transitions this action from one authorization state to another.
-    pub fn try_map<U, E>(self, step: impl FnOnce(T) -> Result<U, E>) -> Result<Action<U>, E> {
+    pub fn try_map<U, E>(self, step: impl FnOnce(T) -> Result<U, E>) -> Result<Action<U, M>, E> {
         Ok(Action {
             nf: self.nf,
             rk: self.rk,
@@ -106,7 +107,7 @@ impl<T> Action<T> {
     }
 }
 
-impl DynamicUsage for Action<redpallas::Signature<SpendAuth>> {
+impl<M: MemoSize> DynamicUsage for Action<redpallas::Signature<SpendAuth>, M> {
     #[inline(always)]
     fn dynamic_usage(&self) -> usize {
         0
@@ -124,6 +125,7 @@ impl DynamicUsage for Action<redpallas::Signature<SpendAuth>> {
 pub(crate) mod testing {
     use rand::{rngs::StdRng, SeedableRng};
     use reddsa::orchard::SpendAuth;
+    use zcash_note_encryption::note_bytes::NoteBytesData;
 
     use proptest::prelude::*;
 
@@ -154,11 +156,11 @@ pub(crate) mod testing {
                 ValueCommitTrapdoor::zero()
             );
             // FIXME: make a real one from the note.
-            let encrypted_note = TransmittedNoteCiphertext {
-                epk_bytes: [0u8; 32],
-                enc_ciphertext: [0u8; 580],
-                out_ciphertext: [0u8; 80]
-            };
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 80],
+            );
             Action {
                 nf,
                 rk,
@@ -186,11 +188,11 @@ pub(crate) mod testing {
             );
 
             // FIXME: make a real one from the note.
-            let encrypted_note = TransmittedNoteCiphertext {
-                epk_bytes: [0u8; 32],
-                enc_ciphertext: [0u8; 580],
-                out_ciphertext: [0u8; 80]
-            };
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 80],
+            );
 
             let rng = StdRng::from_seed(rng_seed);
 
