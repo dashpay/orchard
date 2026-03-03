@@ -26,10 +26,10 @@ pub struct Address {
     ek_pq: Option<PqEncapsulationKey>,
 }
 
-// Address identity is determined by (d, pk_d) only.
-// The PQ encapsulation key is supplementary transport encryption, not part of the
-// cryptographic address identity. Two addresses with the same diversifier and
-// diversified transmission key are the same address regardless of ek_pq.
+// Manual PartialEq: ek_pq is excluded because addresses are reconstructed
+// without it in several code paths (e.g. from_raw_address_bytes, note decryption
+// recovery). Two addresses with the same (d, pk_d) represent the same recipient
+// regardless of whether ek_pq is populated.
 impl PartialEq for Address {
     fn eq(&self, other: &Self) -> bool {
         self.d == other.d && self.pk_d == other.pk_d
