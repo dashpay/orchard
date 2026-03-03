@@ -368,6 +368,10 @@ pub struct TransmittedNoteCiphertext<M: MemoSize = ZcashMemo> {
     /// The ML-KEM-768 ciphertext (hybrid mode only).
     #[cfg(feature = "hybrid-kem")]
     pub ct_pq: [u8; 1088],
+    /// An ECDH-encrypted hint that allows the recipient to recover the diversifier
+    /// used to derive the per-diversifier PQ keypair.
+    #[cfg(feature = "hybrid-kem")]
+    pub diversifier_hint: [u8; 11],
     /// An encrypted value that allows the holder of the outgoing cipher
     /// key for the note to recover the note plaintext.
     #[cfg(feature = "hybrid-kem")]
@@ -401,12 +405,14 @@ impl<M: MemoSize> TransmittedNoteCiphertext<M> {
         epk_bytes: [u8; 32],
         enc_ciphertext: M::NoteCiphertextBytes,
         ct_pq: [u8; 1088],
+        diversifier_hint: [u8; 11],
         out_ciphertext: [u8; 112],
     ) -> Self {
         Self {
             epk_bytes,
             enc_ciphertext,
             ct_pq,
+            diversifier_hint,
             out_ciphertext,
             _memo: PhantomData,
         }
@@ -420,7 +426,10 @@ impl<M: MemoSize> fmt::Debug for TransmittedNoteCiphertext<M> {
             .field("enc_ciphertext", &hex::encode(self.enc_ciphertext.as_ref()))
             .field("out_ciphertext", &hex::encode(self.out_ciphertext));
         #[cfg(feature = "hybrid-kem")]
-        s.field("ct_pq", &hex::encode(self.ct_pq));
+        {
+            s.field("ct_pq", &hex::encode(self.ct_pq));
+            s.field("diversifier_hint", &hex::encode(self.diversifier_hint));
+        }
         s.finish()
     }
 }

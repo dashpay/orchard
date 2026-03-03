@@ -401,7 +401,28 @@ impl<M: MemoSize> OutputInfo<M> {
                         [0u8; crate::hybrid_kem::PQ_CT_SIZE]
                     }
                 };
-            TransmittedNoteCiphertext::from_parts(epk_bytes, enc_ciphertext, ct_pq, out_ciphertext)
+
+            // Compute ECDH shared secret bytes for the diversifier hint.
+            // This duplicates the ECDH scalar multiplication (also done inside ka_agree_enc),
+            // but is unavoidable — we need the raw ECDH bytes before they enter the hybrid KDF.
+            let ss_ecdh = esk.agree(self.recipient.pk_d());
+            let ss_ecdh_bytes = {
+                use group::{Curve, GroupEncoding};
+                ss_ecdh.inner().to_affine().to_bytes()
+            };
+            let diversifier_hint = crate::hybrid_kem::encrypt_diversifier_hint(
+                &ss_ecdh_bytes,
+                &epk_bytes,
+                self.recipient.diversifier().as_array(),
+            );
+
+            TransmittedNoteCiphertext::from_parts(
+                epk_bytes,
+                enc_ciphertext,
+                ct_pq,
+                diversifier_hint,
+                out_ciphertext,
+            )
         };
         #[cfg(not(feature = "hybrid-kem"))]
         let encrypted_note =

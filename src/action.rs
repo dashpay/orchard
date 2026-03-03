@@ -249,6 +249,7 @@ pub(crate) mod testing {
                 [0u8; 32],
                 NoteBytesData([0u8; 580]),
                 [0u8; 1088],
+                [0u8; 11],
                 [0u8; 112],
             );
             Action {
@@ -286,6 +287,7 @@ pub(crate) mod testing {
                 [0u8; 32],
                 NoteBytesData([0u8; 580]),
                 [0u8; 1088],
+                [0u8; 11],
                 [0u8; 112],
             );
 

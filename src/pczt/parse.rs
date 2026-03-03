@@ -219,6 +219,7 @@ impl<M: MemoSize> Output<M> {
         enc_ciphertext: Vec<u8>,
         out_ciphertext: Vec<u8>,
         #[cfg(feature = "hybrid-kem")] ct_pq: Option<[u8; 1088]>,
+        #[cfg(feature = "hybrid-kem")] diversifier_hint: Option<[u8; 11]>,
         recipient: Option<[u8; 43]>,
         value: Option<u64>,
         rseed: Option<[u8; 32]>,
@@ -248,6 +249,7 @@ impl<M: MemoSize> Output<M> {
         #[cfg(feature = "hybrid-kem")]
         let encrypted_note = {
             let ct_pq = ct_pq.ok_or(ParseError::MissingPqCiphertext)?;
+            let div_hint = diversifier_hint.ok_or(ParseError::MissingDiversifierHint)?;
             let out_ciphertext_bytes: [u8; 112] = out_ciphertext
                 .as_slice()
                 .try_into()
@@ -256,6 +258,7 @@ impl<M: MemoSize> Output<M> {
                 ephemeral_key,
                 enc_ciphertext_bytes,
                 ct_pq,
+                div_hint,
                 out_ciphertext_bytes,
             )
         };
@@ -353,6 +356,9 @@ pub enum ParseError {
     InvalidWitness,
     /// An invalid `zip32_derivation` was provided.
     InvalidZip32Derivation,
+    /// `diversifier_hint` must be provided in hybrid-kem mode.
+    #[cfg(feature = "hybrid-kem")]
+    MissingDiversifierHint,
     /// `ct_pq` must be provided in hybrid-kem mode.
     #[cfg(feature = "hybrid-kem")]
     MissingPqCiphertext,
@@ -382,6 +388,10 @@ impl fmt::Display for ParseError {
             ParseError::InvalidValueCommitTrapdoor => write!(f, "invalid `rcv`"),
             ParseError::InvalidWitness => write!(f, "invalid `witness`"),
             ParseError::InvalidZip32Derivation => write!(f, "invalid `zip32_derivation`"),
+            #[cfg(feature = "hybrid-kem")]
+            ParseError::MissingDiversifierHint => {
+                write!(f, "`diversifier_hint` must be provided in hybrid-kem mode")
+            }
             #[cfg(feature = "hybrid-kem")]
             ParseError::MissingPqCiphertext => {
                 write!(f, "`ct_pq` must be provided in hybrid-kem mode")

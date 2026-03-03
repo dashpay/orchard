@@ -8,6 +8,8 @@ use core::marker::PhantomData;
 
 use blake2b_simd::{Hash, Params};
 use group::ff::PrimeField;
+#[cfg(feature = "hybrid-kem")]
+use group::{Curve, GroupEncoding};
 #[cfg(not(feature = "hybrid-kem"))]
 use zcash_note_encryption::{OutPlaintextBytes, OUT_CIPHERTEXT_SIZE, OUT_PLAINTEXT_SIZE};
 
@@ -384,17 +386,37 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         ivk: &Self::IncomingViewingKey,
         epk: &Self::PreparedEphemeralPublicKey,
         pq_ct: Option<&[u8]>,
+        diversifier_hint: Option<&[u8]>,
+        ephemeral_key: &EphemeralKeyBytes,
     ) -> Self::SharedSecret {
         let ecdh_secret = epk.agree(ivk);
-        if let Some(ct_bytes) = pq_ct {
-            if let (Some(pq_dk), Ok(ct_arr)) =
-                (ivk.pq_dk.as_ref(), <&[u8; PQ_CT_SIZE]>::try_from(ct_bytes))
-            {
-                let pq_ss = hybrid_kem::decapsulate(&pq_dk.0, ct_arr);
+        let ecdh_point = ecdh_secret.inner();
+        if let (Some(ct_bytes), Some(hint_bytes), Some(pq_seed)) =
+            (pq_ct, diversifier_hint, ivk.pq_seed.as_ref())
+        {
+            if let (Ok(ct_arr), Ok(hint_arr)) = (
+                <&[u8; PQ_CT_SIZE]>::try_from(ct_bytes),
+                <&[u8; 11]>::try_from(hint_bytes),
+            ) {
+                // 1. Compute raw ECDH bytes for hint decryption
+                let ss_ecdh_bytes = ecdh_point.to_affine().to_bytes();
+                // 2. Decrypt the diversifier hint
+                let diversifier_bytes = hybrid_kem::decrypt_diversifier_hint(
+                    &ss_ecdh_bytes,
+                    &ephemeral_key.0,
+                    hint_arr,
+                );
+                // 3. Derive per-diversifier dk_pq
+                let (_, dk_bytes) = hybrid_kem::generate_pq_keypair_for_diversifier(
+                    pq_seed.to_bytes(),
+                    &diversifier_bytes,
+                );
+                // 4. Decapsulate
+                let pq_ss = hybrid_kem::decapsulate(&dk_bytes, ct_arr);
                 let mut ct_pq = [0u8; PQ_CT_SIZE];
                 ct_pq.copy_from_slice(ct_bytes);
                 return HybridSharedSecret {
-                    ecdh: ecdh_secret.inner(),
+                    ecdh: ecdh_point,
                     pq_ss,
                     ct_pq,
                 };
@@ -402,7 +424,7 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         }
         // Fallback: ECDH only
         HybridSharedSecret {
-            ecdh: ecdh_secret.inner(),
+            ecdh: ecdh_point,
             pq_ss: [0u8; 32],
             ct_pq: [0u8; PQ_CT_SIZE],
         }
@@ -642,6 +664,11 @@ impl<T, M: MemoSize> ShieldedOutput<OrchardDomain<M>> for Action<T, M> {
     fn pq_ciphertext(&self) -> Option<&[u8]> {
         Some(&self.encrypted_note().ct_pq)
     }
+
+    #[cfg(feature = "hybrid-kem")]
+    fn diversifier_hint(&self) -> Option<&[u8]> {
+        Some(&self.encrypted_note().diversifier_hint)
+    }
 }
 
 impl ShieldedOutput<OrchardDomain<ZcashMemo>> for crate::pczt::Action {
@@ -667,6 +694,11 @@ impl ShieldedOutput<OrchardDomain<ZcashMemo>> for crate::pczt::Action {
     #[cfg(feature = "hybrid-kem")]
     fn pq_ciphertext(&self) -> Option<&[u8]> {
         Some(&self.output().encrypted_note().ct_pq)
+    }
+
+    #[cfg(feature = "hybrid-kem")]
+    fn diversifier_hint(&self) -> Option<&[u8]> {
+        Some(&self.output().encrypted_note().diversifier_hint)
     }
 }
 
@@ -785,7 +817,7 @@ pub mod testing {
                 }
             }
         };
-        let note = Note::from_parts(recipient, value, rho, rseed).unwrap();
+        let note = Note::from_parts(recipient.into_raw(), value, rho, rseed).unwrap();
         let cmx = ExtractedNoteCommitment::from(note.commitment());
         let encryptor = OrchardNoteEncryption::<ZcashMemo>::new(ovk, note.clone(), [0u8; 512]);
         let ephemeral_key = OrchardDomain::<ZcashMemo>::epk_bytes(encryptor.epk());
@@ -962,6 +994,23 @@ mod hybrid_tests {
         (sk, fvk)
     }
 
+    /// Compute the diversifier hint for a note and recipient.
+    fn compute_test_hint(
+        note: &Note,
+        recipient: &crate::Address,
+        epk_bytes: &[u8; 32],
+    ) -> [u8; 11] {
+        use group::{Curve, GroupEncoding};
+        let esk = note.esk();
+        let ss_ecdh = esk.agree(recipient.pk_d());
+        let ss_ecdh_bytes = ss_ecdh.inner().to_affine().to_bytes();
+        crate::hybrid_kem::encrypt_diversifier_hint(
+            &ss_ecdh_bytes,
+            epk_bytes,
+            recipient.diversifier().as_array(),
+        )
+    }
+
     /// Test that hybrid mode encrypts and decrypts correctly with the IVK.
     #[test]
     fn hybrid_round_trip_ivk() {
@@ -971,7 +1020,7 @@ mod hybrid_tests {
 
         let nf = Nullifier::dummy(&mut rng);
         let rho = Rho::from_nf_old(nf);
-        let note = Note::new(recipient, NoteValue::from_raw(42), rho, &mut rng);
+        let note = Note::new(recipient.clone(), NoteValue::from_raw(42), rho, &mut rng);
 
         let ne = super::OrchardNoteEncryption::<ZcashMemo>::new(
             Some(fvk.to_ovk(Scope::External)),
@@ -1000,6 +1049,8 @@ mod hybrid_tests {
             crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
                 .expect("encapsulation should succeed");
 
+        let diversifier_hint = compute_test_hint(&note, &recipient, &epk_bytes.0);
+
         let action: crate::action::Action<(), ZcashMemo> = crate::action::Action::from_parts(
             nf,
             crate::primitives::redpallas::VerificationKey::dummy(),
@@ -1008,13 +1059,14 @@ mod hybrid_tests {
                 epk_bytes.0,
                 enc_ciphertext,
                 ct_pq,
+                diversifier_hint,
                 out_ciphertext,
             ),
             cv_net,
             (),
         );
 
-        // Decrypt with IVK (has PQ dk via FVK chain)
+        // Decrypt with IVK (has PQ seed via FVK chain)
         let ivk = fvk.to_ivk(Scope::External);
         let prepared_ivk = PreparedIncomingViewingKey::new(&ivk);
         let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
@@ -1038,7 +1090,7 @@ mod hybrid_tests {
 
         let nf = Nullifier::dummy(&mut rng);
         let rho = Rho::from_nf_old(nf);
-        let note = Note::new(recipient, NoteValue::from_raw(100), rho, &mut rng);
+        let note = Note::new(recipient.clone(), NoteValue::from_raw(100), rho, &mut rng);
 
         let ne = super::OrchardNoteEncryption::<ZcashMemo>::new(None, note.clone(), [0u8; 512]);
 
@@ -1061,6 +1113,8 @@ mod hybrid_tests {
             crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
                 .expect("encapsulation should succeed");
 
+        let diversifier_hint = compute_test_hint(&note, &recipient, &epk_bytes.0);
+
         let action: crate::action::Action<(), ZcashMemo> = crate::action::Action::from_parts(
             nf,
             crate::primitives::redpallas::VerificationKey::dummy(),
@@ -1069,6 +1123,7 @@ mod hybrid_tests {
                 epk_bytes.0,
                 enc_ciphertext,
                 ct_pq,
+                diversifier_hint,
                 out_ciphertext,
             ),
             cv_net,
@@ -1098,7 +1153,7 @@ mod hybrid_tests {
 
         let nf = Nullifier::dummy(&mut rng);
         let rho = Rho::from_nf_old(nf);
-        let note = Note::new(recipient, NoteValue::from_raw(500), rho, &mut rng);
+        let note = Note::new(recipient.clone(), NoteValue::from_raw(500), rho, &mut rng);
 
         let ne = super::OrchardNoteEncryption::<ZcashMemo>::new(
             Some(ovk.clone()),
@@ -1125,6 +1180,8 @@ mod hybrid_tests {
             crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
                 .expect("encapsulation should succeed");
 
+        let diversifier_hint = compute_test_hint(&note, &recipient, &epk_bytes.0);
+
         let action: crate::action::Action<(), ZcashMemo> = crate::action::Action::from_parts(
             nf,
             crate::primitives::redpallas::VerificationKey::dummy(),
@@ -1133,6 +1190,7 @@ mod hybrid_tests {
                 epk_bytes.0,
                 enc_ciphertext,
                 ct_pq,
+                diversifier_hint,
                 out_ciphertext,
             ),
             cv_net.clone(),
@@ -1177,5 +1235,27 @@ mod hybrid_tests {
         let addr2 = fvk2.address_at(0u32, Scope::External);
 
         assert_ne!(addr1.ek_pq().to_bytes(), addr2.ek_pq().to_bytes());
+    }
+
+    /// Verify per-diversifier unlinkability: two addresses from the same FVK
+    /// have different ek_pq values.
+    #[test]
+    fn hybrid_per_diversifier_unlinkability() {
+        let sk = SpendingKey::from_bytes([7; 32]).unwrap();
+        let fvk = FullViewingKey::from(&sk);
+
+        let addr_0 = fvk.address_at(0u32, Scope::External);
+        let addr_1 = fvk.address_at(1u32, Scope::External);
+
+        // Different diversifiers → different ek_pq values (unlinkable)
+        assert_ne!(
+            addr_0.ek_pq().to_bytes(),
+            addr_1.ek_pq().to_bytes(),
+            "addresses with different diversifiers must have different ek_pq"
+        );
+
+        // But the same diversifier always gives the same ek_pq
+        let addr_0b = fvk.address_at(0u32, Scope::External);
+        assert_eq!(addr_0.ek_pq().to_bytes(), addr_0b.ek_pq().to_bytes());
     }
 }

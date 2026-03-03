@@ -33,6 +33,12 @@ const PQ_ENCAPS_RAND_PERSONALIZATION: &[u8; 16] = b"DashPQ_EncapRand";
 /// BLAKE2b personalization for deriving the PQ seed from a spending key.
 const PQ_KEY_DERIVE_PERSONALIZATION: &[u8; 16] = b"DashPQ_KeyDerive";
 
+/// BLAKE2b personalization for deriving a per-diversifier PQ seed.
+const PQ_DIV_SEED_PERSONALIZATION: &[u8; 16] = b"DashPQ_DivSeed__";
+
+/// BLAKE2b personalization for the diversifier hint mask.
+const PQ_DIV_HINT_PERSONALIZATION: &[u8; 16] = b"DashPQ_DivHint__";
+
 /// Derives a 64-byte PQ seed from a 32-byte spending key.
 ///
 /// The seed is split into two 32-byte halves: `d = seed[..32]` and `z = seed[32..]`,
@@ -69,6 +75,75 @@ pub fn generate_pq_keypair(seed: &[u8; 64]) -> ([u8; PQ_EK_SIZE], [u8; PQ_DK_SIZ
     dk_out.copy_from_slice(dk_bytes.as_slice());
 
     (ek_out, dk_out)
+}
+
+/// Derives a per-diversifier PQ seed from the master `pq_seed` and an 11-byte diversifier.
+///
+/// ```text
+/// pq_seed_d = BLAKE2b-512("DashPQ_DivSeed__", pq_seed || diversifier)
+/// ```
+pub fn derive_pq_seed_for_diversifier(pq_seed: &[u8; 64], diversifier: &[u8; 11]) -> [u8; 64] {
+    let hash = Params::new()
+        .hash_length(64)
+        .personal(PQ_DIV_SEED_PERSONALIZATION)
+        .to_state()
+        .update(pq_seed)
+        .update(diversifier)
+        .finalize();
+    let mut seed = [0u8; 64];
+    seed.copy_from_slice(hash.as_bytes());
+    seed
+}
+
+/// Generates a deterministic ML-KEM-768 keypair for a specific diversifier.
+///
+/// Convenience wrapper: derives the per-diversifier seed and calls `generate_pq_keypair`.
+pub fn generate_pq_keypair_for_diversifier(
+    pq_seed: &[u8; 64],
+    diversifier: &[u8; 11],
+) -> ([u8; PQ_EK_SIZE], [u8; PQ_DK_SIZE]) {
+    let div_seed = derive_pq_seed_for_diversifier(pq_seed, diversifier);
+    generate_pq_keypair(&div_seed)
+}
+
+/// Encrypts a diversifier into an 11-byte hint using an ECDH-derived mask.
+///
+/// ```text
+/// mask = BLAKE2b-256("DashPQ_DivHint__", ss_ecdh_bytes || epk_bytes)[..11]
+/// hint = diversifier XOR mask
+/// ```
+///
+/// The hint is transmitted on-chain alongside the PQ ciphertext. The recipient
+/// can recover the diversifier using `decrypt_diversifier_hint` (XOR is self-inverse).
+pub fn encrypt_diversifier_hint(
+    ss_ecdh_bytes: &[u8; 32],
+    epk_bytes: &[u8; 32],
+    diversifier: &[u8; 11],
+) -> [u8; 11] {
+    let mask = Params::new()
+        .hash_length(32)
+        .personal(PQ_DIV_HINT_PERSONALIZATION)
+        .to_state()
+        .update(ss_ecdh_bytes)
+        .update(epk_bytes)
+        .finalize();
+    let mask_bytes = mask.as_bytes();
+    let mut hint = [0u8; 11];
+    for i in 0..11 {
+        hint[i] = diversifier[i] ^ mask_bytes[i];
+    }
+    hint
+}
+
+/// Decrypts an 11-byte diversifier hint back to the original diversifier.
+///
+/// This is identical to `encrypt_diversifier_hint` because XOR is self-inverse.
+pub fn decrypt_diversifier_hint(
+    ss_ecdh_bytes: &[u8; 32],
+    epk_bytes: &[u8; 32],
+    hint: &[u8; 11],
+) -> [u8; 11] {
+    encrypt_diversifier_hint(ss_ecdh_bytes, epk_bytes, hint)
 }
 
 /// Derives deterministic randomness for ML-KEM encapsulation.
@@ -287,6 +362,114 @@ mod tests {
             r3, r4,
             "different ek_pq values must produce different randomness"
         );
+    }
+
+    #[test]
+    fn per_diversifier_seed_is_deterministic() {
+        let pq_seed = [42u8; 64];
+        let diversifier = [1u8; 11];
+
+        let seed1 = derive_pq_seed_for_diversifier(&pq_seed, &diversifier);
+        let seed2 = derive_pq_seed_for_diversifier(&pq_seed, &diversifier);
+        assert_eq!(
+            seed1, seed2,
+            "per-diversifier seed derivation must be deterministic"
+        );
+    }
+
+    #[test]
+    fn different_diversifiers_different_pq_keypairs() {
+        let pq_seed = [42u8; 64];
+        let div1 = [1u8; 11];
+        let div2 = [2u8; 11];
+
+        let (ek1, _) = generate_pq_keypair_for_diversifier(&pq_seed, &div1);
+        let (ek2, _) = generate_pq_keypair_for_diversifier(&pq_seed, &div2);
+        assert_ne!(
+            ek1, ek2,
+            "different diversifiers must produce different PQ keypairs"
+        );
+    }
+
+    #[test]
+    fn diversifier_hint_round_trip() {
+        let ss_ecdh = [10u8; 32];
+        let epk = [20u8; 32];
+        let diversifier = [3u8; 11];
+
+        let hint = encrypt_diversifier_hint(&ss_ecdh, &epk, &diversifier);
+        let recovered = decrypt_diversifier_hint(&ss_ecdh, &epk, &hint);
+        assert_eq!(
+            diversifier, recovered,
+            "hint encrypt/decrypt must round-trip"
+        );
+    }
+
+    #[test]
+    fn diversifier_hint_varies_with_inputs() {
+        let diversifier = [3u8; 11];
+
+        let ss_ecdh1 = [10u8; 32];
+        let ss_ecdh2 = [11u8; 32];
+        let epk = [20u8; 32];
+
+        let hint1 = encrypt_diversifier_hint(&ss_ecdh1, &epk, &diversifier);
+        let hint2 = encrypt_diversifier_hint(&ss_ecdh2, &epk, &diversifier);
+        assert_ne!(
+            hint1, hint2,
+            "different ECDH secrets must produce different hints"
+        );
+
+        let epk2 = [21u8; 32];
+        let hint3 = encrypt_diversifier_hint(&ss_ecdh1, &epk2, &diversifier);
+        assert_ne!(
+            hint1, hint3,
+            "different EPK values must produce different hints"
+        );
+    }
+
+    #[test]
+    fn full_per_diversifier_encrypt_decrypt_round_trip() {
+        // Simulate a full per-diversifier hybrid encryption/decryption flow
+        let spending_key = [42u8; 32];
+        let master_pq_seed = derive_pq_seed(&spending_key);
+        let diversifier = [7u8; 11];
+
+        // Derive per-diversifier keypair
+        let (ek_d, dk_d) = generate_pq_keypair_for_diversifier(&master_pq_seed, &diversifier);
+
+        // Encryption side
+        let rseed = [100u8; 32];
+        let rho = [200u8; 32];
+        let pq_randomness = derive_pq_encaps_randomness(&rseed, &rho, &ek_d);
+        let (ct_pq, ss_pq_enc) =
+            encapsulate_deterministic(&ek_d, &pq_randomness).expect("encapsulation should succeed");
+
+        let ss_ecdh = [55u8; 32];
+        let epk = [66u8; 32];
+
+        // Compute diversifier hint
+        let hint = encrypt_diversifier_hint(&ss_ecdh, &epk, &diversifier);
+
+        // Derive encryption key
+        let key_enc = hybrid_kdf(&ss_ecdh, &ss_pq_enc, &ct_pq, &epk);
+
+        // Decryption side: recover diversifier from hint
+        let recovered_div = decrypt_diversifier_hint(&ss_ecdh, &epk, &hint);
+        assert_eq!(diversifier, recovered_div);
+
+        // Derive per-diversifier dk from recovered diversifier
+        let (_, dk_d_recovered) =
+            generate_pq_keypair_for_diversifier(&master_pq_seed, &recovered_div);
+        assert_eq!(dk_d, dk_d_recovered);
+
+        // Decapsulate
+        let ss_pq_dec = decapsulate(&dk_d_recovered, &ct_pq);
+        assert_eq!(ss_pq_enc, ss_pq_dec);
+
+        // Derive decryption key
+        let key_dec = hybrid_kdf(&ss_ecdh, &ss_pq_dec, &ct_pq, &epk);
+        assert_eq!(key_enc, key_dec);
     }
 
     #[test]
