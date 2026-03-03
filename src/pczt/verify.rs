@@ -70,9 +70,7 @@ impl super::Spend {
         let fvk = self.fvk_for_validation(expected_fvk)?;
 
         let note = Note::from_parts(
-            self.recipient
-                .clone()
-                .ok_or(VerifyError::MissingRecipient)?,
+            self.recipient.ok_or(VerifyError::MissingRecipient)?,
             self.value.ok_or(VerifyError::MissingValue)?,
             self.rho.ok_or(VerifyError::MissingRho)?,
             self.rseed.ok_or(VerifyError::MissingRandomSeed)?,
@@ -130,9 +128,7 @@ impl<M: MemoSize> super::Output<M> {
     /// `spend` must be the Spend from the same Orchard action.
     pub fn verify_note_commitment(&self, spend: &super::Spend) -> Result<(), VerifyError> {
         let note = Note::from_parts(
-            self.recipient
-                .clone()
-                .ok_or(VerifyError::MissingRecipient)?,
+            self.recipient.ok_or(VerifyError::MissingRecipient)?,
             self.value.ok_or(VerifyError::MissingValue)?,
             Rho::from_nf_old(spend.nullifier),
             self.rseed.ok_or(VerifyError::MissingRandomSeed)?,

@@ -18,6 +18,7 @@ use zcash_note_encryption::{
 
 use crate::{
     action::Action,
+    address::RawAddress,
     keys::{
         DiversifiedTransmissionKey, Diversifier, EphemeralPublicKey, EphemeralSecretKey,
         OutgoingViewingKey, PreparedEphemeralPublicKey, PreparedIncomingViewingKey,
@@ -25,7 +26,7 @@ use crate::{
     memo::{MemoSize, ZcashMemo, COMPACT_NOTE_SIZE},
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
     value::{NoteValue, ValueCommitment},
-    Address, Note,
+    Note,
 };
 
 #[cfg(not(feature = "hybrid-kem"))]
@@ -118,7 +119,7 @@ fn orchard_parse_note_plaintext_without_memo<F>(
     domain: &OrchardDomainBase,
     plaintext: &[u8],
     get_pk_d: F,
-) -> Option<(Note, Address)>
+) -> Option<(Note, RawAddress)>
 where
     F: FnOnce(&Diversifier) -> DiversifiedTransmissionKey,
 {
@@ -146,13 +147,8 @@ where
 
     let pk_d = get_pk_d(&diversifier);
 
-    let recipient = Address::from_parts(diversifier, pk_d);
-    let note = Option::from(Note::from_parts(
-        recipient.clone(),
-        value,
-        domain.rho,
-        rseed,
-    ))?;
+    let recipient = RawAddress::from_parts(diversifier, pk_d);
+    let note = Option::from(Note::from_parts(recipient, value, domain.rho, rseed))?;
     Some((note, recipient))
 }
 
@@ -235,7 +231,7 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
     type SharedSecret = SharedSecret;
     type SymmetricKey = Hash;
     type Note = Note;
-    type Recipient = Address;
+    type Recipient = RawAddress;
     #[cfg(feature = "hybrid-kem")]
     type DiversifiedTransmissionKey = OrchardDTK;
     #[cfg(not(feature = "hybrid-kem"))]
@@ -291,7 +287,7 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         {
             OrchardDTK {
                 inner: *note.recipient().pk_d(),
-                pq: match note.recipient().ek_pq() {
+                pq: match note.ek_pq() {
                     Some(ek) => OrchardDTKPq::Encapsulate(Box::new(ek.clone())),
                     None => OrchardDTKPq::None,
                 },
@@ -464,7 +460,7 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
             op[..32].copy_from_slice(&note.recipient().pk_d().to_bytes());
             op[32..64].copy_from_slice(&esk.ecdh.to_repr());
             // Re-derive ss_pq deterministically from ek_pq + pq_randomness
-            if let Some(ek_pq) = note.recipient().ek_pq() {
+            if let Some(ek_pq) = note.ek_pq() {
                 if let Ok((_, ss_pq)) =
                     hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness)
                 {
@@ -999,8 +995,7 @@ mod hybrid_tests {
 
         // Derive ct_pq deterministically from note
         let note_esk = note.esk();
-        let note_recipient = note.recipient();
-        let ek_pq = note_recipient.ek_pq().expect("hybrid address has ek_pq");
+        let ek_pq = note.ek_pq().expect("hybrid note has ek_pq");
         let (ct_pq, _) =
             crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
                 .expect("encapsulation should succeed");
@@ -1061,8 +1056,7 @@ mod hybrid_tests {
         let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
 
         let note_esk = note.esk();
-        let note_recipient = note.recipient();
-        let ek_pq = note_recipient.ek_pq().expect("hybrid address has ek_pq");
+        let ek_pq = note.ek_pq().expect("hybrid note has ek_pq");
         let (ct_pq, _) =
             crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
                 .expect("encapsulation should succeed");
@@ -1126,8 +1120,7 @@ mod hybrid_tests {
         let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
 
         let note_esk = note.esk();
-        let note_recipient = note.recipient();
-        let ek_pq = note_recipient.ek_pq().expect("hybrid address has ek_pq");
+        let ek_pq = note.ek_pq().expect("hybrid note has ek_pq");
         let (ct_pq, _) =
             crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
                 .expect("encapsulation should succeed");
@@ -1169,10 +1162,7 @@ mod hybrid_tests {
         let addr2 = fvk2.address_at(0u32, Scope::External);
 
         assert_eq!(addr1, addr2);
-        assert_eq!(
-            addr1.ek_pq().expect("has ek_pq").to_bytes(),
-            addr2.ek_pq().expect("has ek_pq").to_bytes(),
-        );
+        assert_eq!(addr1.ek_pq().to_bytes(), addr2.ek_pq().to_bytes());
     }
 
     /// Test that different spending keys produce different PQ keys.
@@ -1186,9 +1176,6 @@ mod hybrid_tests {
         let addr1 = fvk1.address_at(0u32, Scope::External);
         let addr2 = fvk2.address_at(0u32, Scope::External);
 
-        assert_ne!(
-            addr1.ek_pq().expect("has ek_pq").to_bytes(),
-            addr2.ek_pq().expect("has ek_pq").to_bytes(),
-        );
+        assert_ne!(addr1.ek_pq().to_bytes(), addr2.ek_pq().to_bytes());
     }
 }

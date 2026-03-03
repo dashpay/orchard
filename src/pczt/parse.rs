@@ -13,6 +13,7 @@ use zip32::ChildIndex;
 
 use super::{Action, Bundle, Output, Spend, Zip32Derivation};
 use crate::{
+    address::RawAddress,
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
     memo::MemoSize,
@@ -20,7 +21,7 @@ use crate::{
     primitives::redpallas::{self, SpendAuth},
     tree::{MerkleHashOrchard, MerklePath},
     value::{NoteValue, Sign, ValueCommitTrapdoor, ValueCommitment, ValueSum},
-    Address, Anchor, Proof, NOTE_COMMITMENT_TREE_DEPTH,
+    Anchor, Proof, NOTE_COMMITMENT_TREE_DEPTH,
 };
 
 impl<M: MemoSize> Bundle<M> {
@@ -129,7 +130,7 @@ impl Spend {
         let recipient = recipient
             .as_ref()
             .map(|r| {
-                Address::from_raw_address_bytes(r)
+                RawAddress::from_raw_address_bytes(r)
                     .into_option()
                     .ok_or(ParseError::InvalidRecipient)
             })
@@ -262,7 +263,7 @@ impl<M: MemoSize> Output<M> {
         let recipient = recipient
             .as_ref()
             .map(|r| {
-                Address::from_raw_address_bytes(r)
+                RawAddress::from_raw_address_bytes(r)
                     .into_option()
                     .ok_or(ParseError::InvalidRecipient)
             })

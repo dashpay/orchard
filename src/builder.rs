@@ -376,6 +376,7 @@ impl<M: MemoSize> OutputInfo<M> {
         mut rng: impl RngCore,
     ) -> (Note, ExtractedNoteCommitment, TransmittedNoteCiphertext<M>) {
         let rho = Rho::from_nf_old(nf_old);
+        #[allow(clippy::clone_on_copy)] // Address is not Copy in hybrid-kem mode
         let note = Note::new(self.recipient.clone(), self.value, rho, &mut rng);
         let cm_new = note.commitment();
         let cmx = cm_new.into();
@@ -391,25 +392,15 @@ impl<M: MemoSize> OutputInfo<M> {
         let encrypted_note = {
             // Deterministic encapsulation produces the same ct_pq as ka_agree_enc did.
             let esk = note.esk();
-            let recipient = note.recipient();
-            // In hybrid mode, all addresses derived from FullViewingKey::address_at()
-            // will have ek_pq. If this panics, the address was constructed incorrectly.
-            let ct_pq = match recipient.ek_pq() {
-                Some(ek_pq) => {
-                    match crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness)
-                    {
-                        Ok((ct_pq, _)) => ct_pq,
-                        Err(_) => {
-                            debug_assert!(false, "PQ encapsulation failed in hybrid-kem mode");
-                            [0u8; crate::hybrid_kem::PQ_CT_SIZE]
-                        }
+            let ek_pq = self.recipient.ek_pq();
+            let ct_pq =
+                match crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness) {
+                    Ok((ct_pq, _)) => ct_pq,
+                    Err(_) => {
+                        debug_assert!(false, "PQ encapsulation failed in hybrid-kem mode");
+                        [0u8; crate::hybrid_kem::PQ_CT_SIZE]
                     }
-                }
-                None => {
-                    debug_assert!(false, "Address missing ek_pq in hybrid-kem mode");
-                    [0u8; crate::hybrid_kem::PQ_CT_SIZE]
-                }
-            };
+                };
             TransmittedNoteCiphertext::from_parts(epk_bytes, enc_ciphertext, ct_pq, out_ciphertext)
         };
         #[cfg(not(feature = "hybrid-kem"))]
@@ -432,7 +423,7 @@ impl<M: MemoSize> OutputInfo<M> {
         crate::pczt::Output {
             cmx,
             encrypted_note,
-            recipient: Some(self.recipient),
+            recipient: Some(self.recipient.into_raw()),
             value: Some(self.value),
             rseed: Some(*note.rseed()),
             // TODO: Extract ock from the encryptor and save it so
@@ -1343,7 +1334,7 @@ pub mod testing {
             }
 
             for (addr, value) in self.output_amounts.into_iter() {
-                let scope = fvk.scope_for_address(&addr).unwrap();
+                let scope = fvk.scope_for_address(addr.raw()).unwrap();
                 let ovk = fvk.to_ovk(scope);
 
                 builder

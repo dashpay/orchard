@@ -15,6 +15,7 @@
   - [Commitment tree](design/commitment-tree.md)
   - [Nullifiers](design/nullifiers.md)
   - [Signatures](design/signatures.md)
+  - [Hybrid post-quantum key encapsulation](design/hybrid-kem.md)
   - [Circuit](design/circuit.md)
     - [Gadgets](design/circuit/gadgets.md)
     - [CommitIvk](design/circuit/commit-ivk.md)

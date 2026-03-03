@@ -55,7 +55,7 @@ pub mod zip32;
 mod test_vectors;
 
 pub use action::{Action, ActionFromPartsError};
-pub use address::Address;
+pub use address::{Address, RawAddress};
 pub use bundle::Bundle;
 pub use constants::MERKLE_DEPTH_ORCHARD as NOTE_COMMITMENT_TREE_DEPTH;
 pub use constants::{L_ORCHARD_BASE, L_ORCHARD_SCALAR, L_VALUE};

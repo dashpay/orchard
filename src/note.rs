@@ -10,12 +10,16 @@ use rand::RngCore;
 use subtle::CtOption;
 
 use crate::{
+    address::RawAddress,
     keys::{EphemeralSecretKey, FullViewingKey, Scope, SpendingKey},
     memo::{MemoSize, ZcashMemo},
     spec::{to_base, to_scalar, NonZeroPallasScalar, PrfExpand},
     value::NoteValue,
     Address,
 };
+
+#[cfg(feature = "hybrid-kem")]
+use crate::keys::PqEncapsulationKey;
 
 #[cfg(not(feature = "unstable-voting-circuits"))]
 pub(crate) mod commitment;
@@ -141,8 +145,8 @@ impl RandomSeed {
 /// A discrete amount of funds received by an address.
 #[derive(Debug, Clone)]
 pub struct Note {
-    /// The recipient of the funds.
-    recipient: Address,
+    /// The recipient of the funds (43-byte on-chain form).
+    recipient: RawAddress,
     /// The value of this note.
     value: NoteValue,
     /// A unique creation ID for this note.
@@ -154,6 +158,12 @@ pub struct Note {
     rho: Rho,
     /// The seed randomness for various note components.
     rseed: RandomSeed,
+    /// The PQ encapsulation key, if available.
+    ///
+    /// This is `Some` when the note was created via [`Note::new`] from a full [`Address`],
+    /// and `None` when reconstructed via [`Note::from_parts`] (e.g. decryption recovery).
+    #[cfg(feature = "hybrid-kem")]
+    ek_pq: Option<PqEncapsulationKey>,
 }
 
 impl PartialEq for Note {
@@ -182,7 +192,7 @@ impl Note {
     ///
     /// [Section 4.19]: https://zips.z.cash/protocol/protocol.pdf#saplingandorchardinband
     pub fn from_parts(
-        recipient: Address,
+        recipient: RawAddress,
         value: NoteValue,
         rho: Rho,
         rseed: RandomSeed,
@@ -192,6 +202,8 @@ impl Note {
             value,
             rho,
             rseed,
+            #[cfg(feature = "hybrid-kem")]
+            ek_pq: None,
         };
         let has_commitment = note.commitment_inner().is_some();
         CtOption::new(note, has_commitment)
@@ -209,17 +221,22 @@ impl Note {
         rho: Rho,
         mut rng: impl RngCore,
     ) -> Self {
-        loop {
-            let note = Note::from_parts(
-                recipient.clone(),
-                value,
-                rho,
-                RandomSeed::random(&mut rng, &rho),
-            );
+        #[cfg(feature = "hybrid-kem")]
+        let ek_pq = Some(recipient.ek_pq().clone());
+        let raw = recipient.into_raw();
+
+        #[allow(unused_mut)]
+        let mut note = loop {
+            let note = Note::from_parts(raw, value, rho, RandomSeed::random(&mut rng, &rho));
             if note.is_some().into() {
                 break note.unwrap();
             }
+        };
+        #[cfg(feature = "hybrid-kem")]
+        {
+            note.ek_pq = ek_pq;
         }
+        note
     }
 
     /// Generates a dummy spent note.
@@ -246,9 +263,18 @@ impl Note {
         (sk, fvk, note)
     }
 
-    /// Returns the recipient of this note.
-    pub fn recipient(&self) -> Address {
-        self.recipient.clone()
+    /// Returns the recipient of this note as a [`RawAddress`].
+    pub fn recipient(&self) -> RawAddress {
+        self.recipient
+    }
+
+    /// Returns the PQ encapsulation key, if available.
+    ///
+    /// This is `Some` when the note was created via [`Note::new`] from a full [`Address`],
+    /// and `None` when reconstructed via [`Note::from_parts`].
+    #[cfg(feature = "hybrid-kem")]
+    pub fn ek_pq(&self) -> Option<&PqEncapsulationKey> {
+        self.ek_pq.as_ref()
     }
 
     /// Returns the value of this note.
@@ -268,11 +294,11 @@ impl Note {
             #[cfg(feature = "hybrid-kem")]
             pq_randomness: {
                 // Bind encapsulation randomness to the recipient's PQ key.
-                // If the address lacks ek_pq (classic address in hybrid build),
+                // If ek_pq is not available (reconstruction path),
                 // use a zero key — encapsulation won't be performed anyway.
                 let ek_pq = self
-                    .recipient
-                    .ek_pq()
+                    .ek_pq
+                    .as_ref()
                     .map(|ek| ek.0)
                     .unwrap_or([0u8; crate::hybrid_kem::PQ_EK_SIZE]);
                 crate::hybrid_kem::derive_pq_encaps_randomness(
@@ -421,15 +447,29 @@ pub mod testing {
     prop_compose! {
         /// Generate an action without authorization data.
         pub fn arb_note(value: NoteValue)(
-            recipient in arb_address(),
+            address in arb_address(),
             rho in arb_nullifier().prop_map(Rho::from_nf_old),
             rseed in arb_rseed(),
         ) -> Note {
-            Note {
-                recipient,
-                value,
-                rho,
-                rseed,
+            #[cfg(feature = "hybrid-kem")]
+            {
+                let ek_pq = Some(address.ek_pq().clone());
+                Note {
+                    recipient: address.into_raw(),
+                    value,
+                    rho,
+                    rseed,
+                    ek_pq,
+                }
+            }
+            #[cfg(not(feature = "hybrid-kem"))]
+            {
+                Note {
+                    recipient: address,
+                    value,
+                    rho,
+                    rseed,
+                }
             }
         }
     }

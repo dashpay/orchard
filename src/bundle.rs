@@ -20,7 +20,7 @@ use memuse::DynamicUsage;
 
 use crate::{
     action::Action,
-    address::Address,
+    address::RawAddress,
     bundle::commitments::{hash_bundle_auth_data, hash_bundle_txid_data},
     keys::{IncomingViewingKey, OutgoingViewingKey, PreparedIncomingViewingKey},
     memo::{MemoSize, ZcashMemo},
@@ -335,7 +335,7 @@ impl<T: Authorization, V, M: MemoSize> Bundle<T, V, M> {
     pub fn decrypt_outputs_with_keys(
         &self,
         keys: &[IncomingViewingKey],
-    ) -> Vec<(usize, IncomingViewingKey, Note, Address, M::Memo)> {
+    ) -> Vec<(usize, IncomingViewingKey, Note, RawAddress, M::Memo)> {
         let prepared_keys: Vec<_> = keys
             .iter()
             .map(|ivk| (ivk, PreparedIncomingViewingKey::new(ivk)))
@@ -360,7 +360,7 @@ impl<T: Authorization, V, M: MemoSize> Bundle<T, V, M> {
         &self,
         action_idx: usize,
         key: &IncomingViewingKey,
-    ) -> Option<(Note, Address, M::Memo)> {
+    ) -> Option<(Note, RawAddress, M::Memo)> {
         let prepared_ivk = PreparedIncomingViewingKey::new(key);
         self.actions.get(action_idx).and_then(move |action| {
             let domain = OrchardDomain::<M>::for_action(action);
@@ -375,7 +375,7 @@ impl<T: Authorization, V, M: MemoSize> Bundle<T, V, M> {
     pub fn recover_outputs_with_ovks(
         &self,
         keys: &[OutgoingViewingKey],
-    ) -> Vec<(usize, OutgoingViewingKey, Note, Address, M::Memo)> {
+    ) -> Vec<(usize, OutgoingViewingKey, Note, RawAddress, M::Memo)> {
         self.actions
             .iter()
             .enumerate()
@@ -402,7 +402,7 @@ impl<T: Authorization, V, M: MemoSize> Bundle<T, V, M> {
         &self,
         action_idx: usize,
         key: &OutgoingViewingKey,
-    ) -> Option<(Note, Address, M::Memo)> {
+    ) -> Option<(Note, RawAddress, M::Memo)> {
         self.actions.get(action_idx).and_then(move |action| {
             let domain = OrchardDomain::<M>::for_action(action);
             try_output_recovery_with_ovk(

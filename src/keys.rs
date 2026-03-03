@@ -21,7 +21,7 @@ use zcash_note_encryption::EphemeralKeyBytes;
 use crate::hybrid_kem::{self, PQ_CT_SIZE, PQ_DK_SIZE, PQ_EK_SIZE};
 
 use crate::{
-    address::Address,
+    address::{Address, RawAddress},
     primitives::redpallas::{self, SpendAuth},
     spec::{
         commit_ivk, diversify_hash, extract_p, ka_orchard, ka_orchard_prepared, prf_nf, to_base,
@@ -427,32 +427,43 @@ impl FullViewingKey {
 
     /// Returns the payment address for this key at the given index.
     pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
-        let addr = self.to_ivk(scope).address_at(j);
-        #[cfg(feature = "hybrid-kem")]
-        if let Some(ek) = &self.ek_pq {
-            return Address::from_parts_with_pq(addr.diversifier(), *addr.pk_d(), ek.clone());
-        }
-        addr
+        let raw = self.to_ivk(scope).address_at(j);
+        self.wrap_raw_address(raw)
     }
 
     /// Returns the payment address for this key corresponding to the given diversifier.
     pub fn address(&self, d: Diversifier, scope: Scope) -> Address {
         // Shortcut: we don't need to derive DiversifierKey.
-        let addr = match scope {
+        let raw = match scope {
             Scope::External => KeyAgreementPrivateKey::from_fvk(self),
             Scope::Internal => KeyAgreementPrivateKey::from_fvk(&self.derive_internal()),
         }
         .address(d);
+        self.wrap_raw_address(raw)
+    }
+
+    /// Wraps a [`RawAddress`] into a full [`Address`].
+    ///
+    /// In hybrid-kem mode, this attaches the PQ encapsulation key from this FVK.
+    /// Panics if the FVK was deserialized from bytes and lacks a PQ key.
+    fn wrap_raw_address(&self, raw: RawAddress) -> Address {
         #[cfg(feature = "hybrid-kem")]
-        if let Some(ek) = &self.ek_pq {
-            return Address::from_parts_with_pq(addr.diversifier(), *addr.pk_d(), ek.clone());
+        {
+            let ek_pq = self
+                .ek_pq
+                .clone()
+                .expect("FullViewingKey must have ek_pq to derive an Address");
+            Address::from_parts(raw, ek_pq)
         }
-        addr
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            raw
+        }
     }
 
     /// Returns the scope of the given address, or `None` if the address is not derived
     /// from this full viewing key.
-    pub fn scope_for_address(&self, address: &Address) -> Option<Scope> {
+    pub fn scope_for_address(&self, address: &RawAddress) -> Option<Scope> {
         [Scope::External, Scope::Internal]
             .into_iter()
             .find(|scope| self.to_ivk(*scope).diversifier_index(address).is_some())
@@ -675,10 +686,10 @@ impl KeyAgreementPrivateKey {
     }
 
     /// Returns the payment address for this key corresponding to the given diversifier.
-    fn address(&self, d: Diversifier) -> Address {
+    fn address(&self, d: Diversifier) -> RawAddress {
         let prepared_ivk = PreparedIncomingViewingKey::new_inner(self);
         let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
-        Address::from_parts(d, pk_d)
+        RawAddress::from_parts(d, pk_d)
     }
 }
 
@@ -761,7 +772,7 @@ impl IncomingViewingKey {
     /// Checks whether the given address was derived from this incoming viewing
     /// key, and returns the diversifier index used to derive the address if
     /// so. Returns `None` if the address was not derived from this key.
-    pub fn diversifier_index(&self, addr: &Address) -> Option<DiversifierIndex> {
+    pub fn diversifier_index(&self, addr: &RawAddress) -> Option<DiversifierIndex> {
         let j = self.dk.diversifier_index(&addr.diversifier());
         if &self.address_at(j) == addr {
             Some(j)
@@ -770,13 +781,13 @@ impl IncomingViewingKey {
         }
     }
 
-    /// Returns the payment address for this key at the given index.
-    pub fn address_at(&self, j: impl Into<DiversifierIndex>) -> Address {
+    /// Returns the raw payment address for this key at the given index.
+    pub fn address_at(&self, j: impl Into<DiversifierIndex>) -> RawAddress {
         self.address(self.dk.get(j))
     }
 
-    /// Returns the payment address for this key corresponding to the given diversifier.
-    pub fn address(&self, d: Diversifier) -> Address {
+    /// Returns the raw payment address for this key corresponding to the given diversifier.
+    pub fn address(&self, d: Diversifier) -> RawAddress {
         self.ivk.address(d)
     }
 
@@ -1323,7 +1334,7 @@ mod tests {
 
             let rho = Rho::from_bytes(&tv.note_rho).unwrap();
             let note = Note::from_parts(
-                addr,
+                *addr.raw(),
                 NoteValue::from_raw(tv.note_v),
                 rho,
                 RandomSeed::from_bytes(tv.note_rseed, &rho).unwrap(),
