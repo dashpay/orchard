@@ -2643,6 +2643,7 @@ dependencies = [
 [[package]]
 name = "zcash_note_encryption"
 version = "0.4.1"
+source = "git+https://github.com/dashpay/zcash_note_encryption?branch=feat%2Fhybrid-kem-support#db0eef3c62367d72e6d3728cefa507b8c374b248"
 dependencies = [
  "chacha20",
  "chacha20poly1305",

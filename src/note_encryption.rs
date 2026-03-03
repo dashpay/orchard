@@ -1,8 +1,8 @@
 //! In-band secret distribution for Orchard bundles.
 
-use alloc::vec::Vec;
 #[cfg(feature = "hybrid-kem")]
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 use core::fmt;
 use core::marker::PhantomData;
 
@@ -147,7 +147,12 @@ where
     let pk_d = get_pk_d(&diversifier);
 
     let recipient = Address::from_parts(diversifier, pk_d);
-    let note = Option::from(Note::from_parts(recipient.clone(), value, domain.rho, rseed))?;
+    let note = Option::from(Note::from_parts(
+        recipient.clone(),
+        value,
+        domain.rho,
+        rseed,
+    ))?;
     Some((note, recipient))
 }
 
@@ -386,10 +391,9 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
     ) -> Self::SharedSecret {
         let ecdh_secret = epk.agree(ivk);
         if let Some(ct_bytes) = pq_ct {
-            if let (Some(pq_dk), Ok(ct_arr)) = (
-                ivk.pq_dk.as_ref(),
-                <&[u8; PQ_CT_SIZE]>::try_from(ct_bytes),
-            ) {
+            if let (Some(pq_dk), Ok(ct_arr)) =
+                (ivk.pq_dk.as_ref(), <&[u8; PQ_CT_SIZE]>::try_from(ct_bytes))
+            {
                 let pq_ss = hybrid_kem::decapsulate(&pq_dk.0, ct_arr);
                 let mut ct_pq = [0u8; PQ_CT_SIZE];
                 ct_pq.copy_from_slice(ct_bytes);
@@ -566,14 +570,15 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
             }
             OrchardDTK {
                 inner,
-                pq: OrchardDTKPq::Recovery { ss_pq, ct_pq: Box::new(ct_pq) },
+                pq: OrchardDTKPq::Recovery {
+                    ss_pq,
+                    ct_pq: Box::new(ct_pq),
+                },
             }
         })
     }
 
-    fn extract_esk(
-        out_plaintext: &Self::OutPlaintextBytes,
-    ) -> Option<Self::EphemeralSecretKey> {
+    fn extract_esk(out_plaintext: &Self::OutPlaintextBytes) -> Option<Self::EphemeralSecretKey> {
         #[cfg(feature = "hybrid-kem")]
         {
             EphemeralSecretKey::from_bytes(out_plaintext.0[32..64].try_into().unwrap()).into()
@@ -596,9 +601,7 @@ impl<M: MemoSize> BatchDomain for OrchardDomain<M> {
         {
             // In hybrid mode, each shared secret may carry PQ data, so we KDF individually.
             items
-                .map(|(secret, ephemeral_key)| {
-                    secret.map(|s| s.kdf_hybrid(ephemeral_key))
-                })
+                .map(|(secret, ephemeral_key)| secret.map(|s| s.kdf_hybrid(ephemeral_key)))
                 .collect()
         }
         #[cfg(not(feature = "hybrid-kem"))]
@@ -608,8 +611,7 @@ impl<M: MemoSize> BatchDomain for OrchardDomain<M> {
             SharedSecret::batch_to_affine(shared_secrets)
                 .zip(ephemeral_keys)
                 .map(|(secret, ephemeral_key)| {
-                    secret
-                        .map(|dhsecret| SharedSecret::kdf_orchard_inner(dhsecret, ephemeral_key))
+                    secret.map(|dhsecret| SharedSecret::kdf_orchard_inner(dhsecret, ephemeral_key))
                 })
                 .collect()
         }
@@ -1145,8 +1147,7 @@ mod hybrid_tests {
         );
 
         let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
-        let result =
-            try_output_recovery_with_ovk(&domain, &ovk, &action, &cv_net, &out_ciphertext);
+        let result = try_output_recovery_with_ovk(&domain, &ovk, &action, &cv_net, &out_ciphertext);
         assert!(
             result.is_some(),
             "Hybrid output recovery with OVK should succeed"

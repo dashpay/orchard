@@ -432,9 +432,13 @@ mod tests {
         let note = {
             let rho = Rho::from_bytes(&pallas::Base::random(&mut rng).to_repr()).unwrap();
             loop {
-                if let Some(note) =
-                    Note::from_parts(recipient.clone(), value, rho, RandomSeed::random(&mut rng, &rho))
-                        .into_option()
+                if let Some(note) = Note::from_parts(
+                    recipient.clone(),
+                    value,
+                    rho,
+                    RandomSeed::random(&mut rng, &rho),
+                )
+                .into_option()
                 {
                     break note;
                 }

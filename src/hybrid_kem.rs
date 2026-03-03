@@ -10,7 +10,7 @@
 
 use blake2b_simd::Params;
 use ml_kem::kem::Decapsulate;
-use ml_kem::{array::Array, B32, EncapsulateDeterministic, EncodedSizeUser, KemCore, MlKem768};
+use ml_kem::{array::Array, EncapsulateDeterministic, EncodedSizeUser, KemCore, MlKem768, B32};
 
 /// Size of an ML-KEM-768 encapsulation key (public key).
 pub const PQ_EK_SIZE: usize = 1184;
@@ -113,9 +113,7 @@ pub fn encapsulate_deterministic(
     randomness: &[u8; 32],
 ) -> Result<([u8; PQ_CT_SIZE], [u8; PQ_SS_SIZE]), PqError> {
     // Array sizes are enforced by the type system — no runtime failure possible here.
-    let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(
-        &Array::from(*ek_bytes),
-    );
+    let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&Array::from(*ek_bytes));
 
     let m: B32 = Array::from(*randomness);
     let (ct, ss) = ek
@@ -136,16 +134,16 @@ pub fn encapsulate_deterministic(
 /// (implicit rejection returns a pseudorandom value for invalid ciphertexts),
 /// so this function is infallible.
 pub fn decapsulate(dk_bytes: &[u8; PQ_DK_SIZE], ct_bytes: &[u8; PQ_CT_SIZE]) -> [u8; PQ_SS_SIZE] {
-    let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(
-        &Array::from(*dk_bytes),
-    );
+    let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(&Array::from(*dk_bytes));
 
     let ct = ml_kem::Ciphertext::<MlKem768>::try_from(ct_bytes.as_slice())
         .expect("ct_bytes length matches PQ_CT_SIZE");
 
     // ML-KEM decapsulation with implicit rejection: invalid ciphertexts produce
     // a pseudorandom shared secret rather than failing. The unwrap is safe.
-    let ss = dk.decapsulate(&ct).expect("ML-KEM decapsulation always succeeds (implicit rejection)");
+    let ss = dk
+        .decapsulate(&ct)
+        .expect("ML-KEM decapsulation always succeeds (implicit rejection)");
 
     let mut ss_out = [0u8; PQ_SS_SIZE];
     ss_out.copy_from_slice(ss.as_slice());
@@ -206,8 +204,8 @@ mod tests {
         let (ek, dk) = generate_pq_keypair(&seed);
 
         let randomness = [99u8; 32];
-        let (ct, ss_enc) = encapsulate_deterministic(&ek, &randomness)
-            .expect("encapsulation should succeed");
+        let (ct, ss_enc) =
+            encapsulate_deterministic(&ek, &randomness).expect("encapsulation should succeed");
         let ss_dec = decapsulate(&dk, &ct);
 
         assert_eq!(
@@ -223,10 +221,10 @@ mod tests {
         let (ek, _dk) = generate_pq_keypair(&seed);
 
         let randomness = [99u8; 32];
-        let (ct1, ss1) = encapsulate_deterministic(&ek, &randomness)
-            .expect("encapsulation should succeed");
-        let (ct2, ss2) = encapsulate_deterministic(&ek, &randomness)
-            .expect("encapsulation should succeed");
+        let (ct1, ss1) =
+            encapsulate_deterministic(&ek, &randomness).expect("encapsulation should succeed");
+        let (ct2, ss2) =
+            encapsulate_deterministic(&ek, &randomness).expect("encapsulation should succeed");
 
         assert_eq!(ct1, ct2, "encapsulation must be deterministic");
         assert_eq!(ss1, ss2, "shared secret must be deterministic");
@@ -302,8 +300,8 @@ mod tests {
         let rseed = [100u8; 32];
         let rho = [200u8; 32];
         let pq_randomness = derive_pq_encaps_randomness(&rseed, &rho, &ek);
-        let (ct_pq, ss_pq_enc) = encapsulate_deterministic(&ek, &pq_randomness)
-            .expect("encapsulation should succeed");
+        let (ct_pq, ss_pq_enc) =
+            encapsulate_deterministic(&ek, &pq_randomness).expect("encapsulation should succeed");
 
         // Simulate ECDH shared secret (in real code this comes from ka_orchard)
         let ss_ecdh = [55u8; 32];

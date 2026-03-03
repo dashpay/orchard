@@ -396,14 +396,15 @@ impl<M: MemoSize> OutputInfo<M> {
             // will have ek_pq. If this panics, the address was constructed incorrectly.
             let ct_pq = match recipient.ek_pq() {
                 Some(ek_pq) => {
-                    let (ct_pq, _) = crate::hybrid_kem::encapsulate_deterministic(
-                        &ek_pq.0,
-                        &esk.pq_randomness,
-                    )
-                    .expect("encapsulation with a valid key should not fail");
+                    let (ct_pq, _) =
+                        crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness)
+                            .expect("encapsulation with a valid key should not fail");
                     ct_pq
                 }
-                None => [0u8; crate::hybrid_kem::PQ_CT_SIZE],
+                None => {
+                    debug_assert!(false, "Address missing ek_pq in hybrid-kem mode");
+                    [0u8; crate::hybrid_kem::PQ_CT_SIZE]
+                }
             };
             TransmittedNoteCiphertext::from_parts(epk_bytes, enc_ciphertext, ct_pq, out_ciphertext)
         };

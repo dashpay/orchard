@@ -38,7 +38,6 @@ impl PartialEq for Address {
 
 impl Eq for Address {}
 
-
 impl Address {
     pub(crate) fn from_parts(d: Diversifier, pk_d: DiversifiedTransmissionKey) -> Self {
         // We assume here that pk_d is correctly-derived from d. We ensure this for
