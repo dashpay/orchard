@@ -17,6 +17,9 @@ use rand::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use zcash_note_encryption::EphemeralKeyBytes;
 
+#[cfg(feature = "hybrid-kem")]
+use crate::hybrid_kem::{self, PQ_CT_SIZE, PQ_DK_SIZE, PQ_EK_SIZE};
+
 use crate::{
     address::Address,
     primitives::redpallas::{self, SpendAuth},
@@ -89,6 +92,14 @@ impl SpendingKey {
     /// Returns the raw bytes of the spending key.
     pub fn to_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// Derives a 64-byte PQ seed from the spending key bytes.
+    ///
+    /// The seed is split into `d = seed[..32]` and `z = seed[32..]` for ML-KEM-768 KeyGen.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn pq_seed(&self) -> [u8; 64] {
+        hybrid_kem::derive_pq_seed(&self.0)
     }
 
     /// Derives the Orchard spending key for the given seed, coin type, and account.
@@ -312,19 +323,56 @@ impl CommitIvkRandomness {
 /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
 ///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct FullViewingKey {
     ak: SpendValidatingKey,
     nk: NullifierDerivingKey,
     rivk: CommitIvkRandomness,
+    #[cfg(feature = "hybrid-kem")]
+    ek_pq: Option<PqEncapsulationKey>,
+    #[cfg(feature = "hybrid-kem")]
+    dk_pq: Option<PqDecapsulationKey>,
+}
+
+// FVK identity is determined by (ak, nk, rivk) only.
+// The PQ keys are supplementary and may or may not be present depending on
+// whether the FVK was derived from a spending key or deserialized from bytes.
+impl PartialEq for FullViewingKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.ak == other.ak && self.nk == other.nk && self.rivk == other.rivk
+    }
+}
+
+impl Eq for FullViewingKey {}
+
+impl PartialOrd for FullViewingKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FullViewingKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        (&self.ak, &self.nk, &self.rivk).cmp(&(&other.ak, &other.nk, &other.rivk))
+    }
 }
 
 impl From<&SpendingKey> for FullViewingKey {
     fn from(sk: &SpendingKey) -> Self {
+        #[cfg(feature = "hybrid-kem")]
+        let (ek_pq, dk_pq) = {
+            let pq_seed = sk.pq_seed();
+            let (ek, dk) = hybrid_kem::generate_pq_keypair(&pq_seed);
+            (Some(PqEncapsulationKey(ek)), Some(PqDecapsulationKey(dk)))
+        };
         FullViewingKey {
             ak: (&SpendAuthorizingKey::from(sk)).into(),
             nk: sk.into(),
             rivk: sk.into(),
+            #[cfg(feature = "hybrid-kem")]
+            ek_pq,
+            #[cfg(feature = "hybrid-kem")]
+            dk_pq,
         }
     }
 }
@@ -379,17 +427,27 @@ impl FullViewingKey {
 
     /// Returns the payment address for this key at the given index.
     pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
-        self.to_ivk(scope).address_at(j)
+        let addr = self.to_ivk(scope).address_at(j);
+        #[cfg(feature = "hybrid-kem")]
+        if let Some(ek) = &self.ek_pq {
+            return Address::from_parts_with_pq(addr.diversifier(), *addr.pk_d(), ek.clone());
+        }
+        addr
     }
 
     /// Returns the payment address for this key corresponding to the given diversifier.
     pub fn address(&self, d: Diversifier, scope: Scope) -> Address {
         // Shortcut: we don't need to derive DiversifierKey.
-        match scope {
+        let addr = match scope {
             Scope::External => KeyAgreementPrivateKey::from_fvk(self),
             Scope::Internal => KeyAgreementPrivateKey::from_fvk(&self.derive_internal()),
         }
-        .address(d)
+        .address(d);
+        #[cfg(feature = "hybrid-kem")]
+        if let Some(ek) = &self.ek_pq {
+            return Address::from_parts_with_pq(addr.diversifier(), *addr.pk_d(), ek.clone());
+        }
+        addr
     }
 
     /// Returns the scope of the given address, or `None` if the address is not derived
@@ -441,7 +499,15 @@ impl FullViewingKey {
         let nk = NullifierDerivingKey::from_bytes(&bytes[32..64])?;
         let rivk = CommitIvkRandomness::from_bytes(&bytes[64..])?;
 
-        let fvk = FullViewingKey { ak, nk, rivk };
+        let fvk = FullViewingKey {
+            ak,
+            nk,
+            rivk,
+            #[cfg(feature = "hybrid-kem")]
+            ek_pq: None,
+            #[cfg(feature = "hybrid-kem")]
+            dk_pq: None,
+        };
 
         // If either ivk is 0 or ⊥, this FVK is invalid.
         let _: NonZeroPallasBase = Option::from(KeyAgreementPrivateKey::derive_inner(&fvk))?;
@@ -460,6 +526,10 @@ impl FullViewingKey {
             ak: self.ak.clone(),
             nk: self.nk,
             rivk: self.rivk(Scope::Internal),
+            #[cfg(feature = "hybrid-kem")]
+            ek_pq: self.ek_pq.clone(),
+            #[cfg(feature = "hybrid-kem")]
+            dk_pq: self.dk_pq.clone(),
         }
     }
 
@@ -624,10 +694,33 @@ impl KeyAgreementPrivateKey {
 /// Defined in [Zcash Protocol Spec § 5.6.4.3: Orchard Raw Incoming Viewing Keys][orchardinviewingkeyencoding].
 ///
 /// [orchardinviewingkeyencoding]: https://zips.z.cash/protocol/nu5.pdf#orchardinviewingkeyencoding
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug)]
 pub struct IncomingViewingKey {
     dk: DiversifierKey,
     ivk: KeyAgreementPrivateKey,
+    #[cfg(feature = "hybrid-kem")]
+    dk_pq: Option<PqDecapsulationKey>,
+}
+
+// IVK identity is determined by (dk, ivk) only — PQ dk is supplementary.
+impl PartialEq for IncomingViewingKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.dk == other.dk && self.ivk == other.ivk
+    }
+}
+
+impl Eq for IncomingViewingKey {}
+
+impl PartialOrd for IncomingViewingKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for IncomingViewingKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        (&self.dk, &self.ivk).cmp(&(&other.dk, &other.ivk))
+    }
 }
 
 impl IncomingViewingKey {
@@ -636,6 +729,8 @@ impl IncomingViewingKey {
         IncomingViewingKey {
             dk: fvk.derive_dk_ovk().0,
             ivk: KeyAgreementPrivateKey::from_fvk(fvk),
+            #[cfg(feature = "hybrid-kem")]
+            dk_pq: fvk.dk_pq.clone(),
         }
     }
 }
@@ -657,6 +752,8 @@ impl IncomingViewingKey {
             IncomingViewingKey {
                 dk: DiversifierKey(bytes[..32].try_into().unwrap()),
                 ivk: KeyAgreementPrivateKey(ivk.into()),
+                #[cfg(feature = "hybrid-kem")]
+                dk_pq: None,
             }
         })
     }
@@ -691,16 +788,20 @@ impl IncomingViewingKey {
 
 /// An Orchard incoming viewing key that has been precomputed for trial decryption.
 #[derive(Clone, Debug)]
-pub struct PreparedIncomingViewingKey(PreparedNonZeroScalar);
+pub struct PreparedIncomingViewingKey {
+    ecdh: PreparedNonZeroScalar,
+    #[cfg(feature = "hybrid-kem")]
+    pub(crate) pq_dk: Option<PqDecapsulationKey>,
+}
 
 #[cfg(feature = "std")]
 impl memuse::DynamicUsage for PreparedIncomingViewingKey {
     fn dynamic_usage(&self) -> usize {
-        self.0.dynamic_usage()
+        self.ecdh.dynamic_usage()
     }
 
     fn dynamic_usage_bounds(&self) -> (usize, Option<usize>) {
-        self.0.dynamic_usage_bounds()
+        self.ecdh.dynamic_usage_bounds()
     }
 }
 
@@ -708,11 +809,32 @@ impl PreparedIncomingViewingKey {
     /// Performs the necessary precomputations to use an `IncomingViewingKey` for note
     /// decryption.
     pub fn new(ivk: &IncomingViewingKey) -> Self {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            PreparedIncomingViewingKey {
+                ecdh: PreparedNonZeroScalar::new(&ivk.ivk.0),
+                pq_dk: ivk.dk_pq.clone(),
+            }
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
         Self::new_inner(&ivk.ivk)
     }
 
+    /// Creates a prepared IVK with a PQ decapsulation key for hybrid decryption.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn new_with_pq_dk(ivk: &IncomingViewingKey, pq_dk: PqDecapsulationKey) -> Self {
+        PreparedIncomingViewingKey {
+            ecdh: PreparedNonZeroScalar::new(&ivk.ivk.0),
+            pq_dk: Some(pq_dk),
+        }
+    }
+
     fn new_inner(ivk: &KeyAgreementPrivateKey) -> Self {
-        Self(PreparedNonZeroScalar::new(&ivk.0))
+        PreparedIncomingViewingKey {
+            ecdh: PreparedNonZeroScalar::new(&ivk.0),
+            #[cfg(feature = "hybrid-kem")]
+            pq_dk: None,
+        }
     }
 }
 
@@ -747,6 +869,75 @@ impl AsRef<[u8; 32]> for OutgoingViewingKey {
     }
 }
 
+/// An ML-KEM-768 encapsulation key (public key) for post-quantum key exchange.
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone, Debug)]
+pub struct PqEncapsulationKey(pub(crate) [u8; PQ_EK_SIZE]);
+
+#[cfg(feature = "hybrid-kem")]
+impl PqEncapsulationKey {
+    /// Returns the raw bytes.
+    pub fn to_bytes(&self) -> &[u8; PQ_EK_SIZE] {
+        &self.0
+    }
+
+    /// Constructs from raw bytes.
+    pub fn from_bytes(bytes: [u8; PQ_EK_SIZE]) -> Self {
+        PqEncapsulationKey(bytes)
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl PartialEq for PqEncapsulationKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0[..] == other.0[..]
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl Eq for PqEncapsulationKey {}
+
+#[cfg(feature = "hybrid-kem")]
+impl PartialOrd for PqEncapsulationKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl Ord for PqEncapsulationKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0[..].cmp(&other.0[..])
+    }
+}
+
+/// An ML-KEM-768 decapsulation key (private key) for post-quantum key exchange.
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone)]
+pub struct PqDecapsulationKey(pub(crate) [u8; PQ_DK_SIZE]);
+
+#[cfg(feature = "hybrid-kem")]
+impl core::fmt::Debug for PqDecapsulationKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("PqDecapsulationKey")
+            .field(&format_args!("{} bytes", PQ_DK_SIZE))
+            .finish()
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl PqDecapsulationKey {
+    /// Returns the raw bytes.
+    pub fn to_bytes(&self) -> &[u8; PQ_DK_SIZE] {
+        &self.0
+    }
+
+    /// Constructs from raw bytes.
+    pub fn from_bytes(bytes: [u8; PQ_DK_SIZE]) -> Self {
+        PqDecapsulationKey(bytes)
+    }
+}
+
 /// The diversified transmission key for a given payment address.
 ///
 /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
@@ -769,7 +960,7 @@ impl DiversifiedTransmissionKey {
     /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
     pub(crate) fn derive(ivk: &PreparedIncomingViewingKey, d: &Diversifier) -> Self {
         let g_d = PreparedNonIdentityBase::new(diversify_hash(d.as_array()));
-        DiversifiedTransmissionKey(ka_orchard_prepared(&ivk.0, &g_d))
+        DiversifiedTransmissionKey(ka_orchard_prepared(&ivk.ecdh, &g_d))
     }
 
     /// $abst_P(bytes)$
@@ -803,25 +994,41 @@ impl ConditionallySelectable for DiversifiedTransmissionKey {
 ///
 /// [concreteorchardkeyagreement]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkeyagreement
 #[derive(Debug)]
-pub struct EphemeralSecretKey(pub(crate) NonZeroPallasScalar);
+pub struct EphemeralSecretKey {
+    pub(crate) ecdh: NonZeroPallasScalar,
+    #[cfg(feature = "hybrid-kem")]
+    pub(crate) pq_randomness: [u8; 32],
+}
 
 impl ConstantTimeEq for EphemeralSecretKey {
     fn ct_eq(&self, other: &Self) -> subtle::Choice {
-        self.0.ct_eq(&other.0)
+        // Only compare the ECDH scalar. The pq_randomness field is derived from
+        // (rseed, rho) and does not roundtrip through the outgoing plaintext,
+        // so it may differ between extracted and derived ESKs.
+        self.ecdh.ct_eq(&other.ecdh)
     }
 }
 
 impl EphemeralSecretKey {
     pub(crate) fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
-        NonZeroPallasScalar::from_bytes(bytes).map(EphemeralSecretKey)
+        NonZeroPallasScalar::from_bytes(bytes).map(|scalar| EphemeralSecretKey {
+            ecdh: scalar,
+            #[cfg(feature = "hybrid-kem")]
+            pq_randomness: [0u8; 32],
+        })
     }
 
     pub(crate) fn derive_public(&self, g_d: NonIdentityPallasPoint) -> EphemeralPublicKey {
-        EphemeralPublicKey(ka_orchard(&self.0, &g_d))
+        EphemeralPublicKey(ka_orchard(&self.ecdh, &g_d))
     }
 
     pub(crate) fn agree(&self, pk_d: &DiversifiedTransmissionKey) -> SharedSecret {
-        SharedSecret(ka_orchard(&self.0, &pk_d.0))
+        SharedSecret(ka_orchard(&self.ecdh, &pk_d.0))
+    }
+
+    /// Returns the ECDH scalar.
+    pub(crate) fn ecdh_scalar(&self) -> &NonZeroPallasScalar {
+        &self.ecdh
     }
 }
 
@@ -862,7 +1069,7 @@ impl PreparedEphemeralPublicKey {
     }
 
     pub(crate) fn agree(&self, ivk: &PreparedIncomingViewingKey) -> SharedSecret {
-        SharedSecret(ka_orchard_prepared(&ivk.0, &self.0))
+        SharedSecret(ka_orchard_prepared(&ivk.ecdh, &self.0))
     }
 }
 
@@ -875,6 +1082,11 @@ impl PreparedEphemeralPublicKey {
 pub struct SharedSecret(NonIdentityPallasPoint);
 
 impl SharedSecret {
+    /// Extracts the inner Pallas point.
+    pub(crate) fn inner(self) -> NonIdentityPallasPoint {
+        self.0
+    }
+
     /// For checking test vectors only.
     #[cfg(test)]
     pub(crate) fn to_bytes(&self) -> [u8; 32] {
@@ -921,6 +1133,46 @@ impl SharedSecret {
             .update(&secret.to_bytes())
             .update(&ephemeral_key.0)
             .finalize()
+    }
+}
+
+/// A shared secret combining ECDH and ML-KEM for hybrid post-quantum key exchange.
+///
+/// Shared secret produced by hybrid key agreement (ECDH + ML-KEM).
+///
+/// This type carries the ECDH shared secret, the ML-KEM shared secret, and the ML-KEM
+/// ciphertext (needed for the transmitted note). The KDF uses only the shared secrets
+/// and the ephemeral public key. ML-KEM's IND-CCA2 security ensures that modifying the
+/// PQ ciphertext changes the shared secret.
+#[cfg(feature = "hybrid-kem")]
+#[derive(Debug)]
+pub struct HybridSharedSecret {
+    pub(crate) ecdh: NonIdentityPallasPoint,
+    pub(crate) pq_ss: [u8; 32],
+    pub(crate) ct_pq: [u8; PQ_CT_SIZE],
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl HybridSharedSecret {
+    /// Derives the symmetric key using the hybrid KDF.
+    ///
+    /// Binds both shared secrets and the ephemeral public key into the derived key.
+    pub(crate) fn kdf_hybrid(&self, ephemeral_key: &EphemeralKeyBytes) -> Blake2bHash {
+        let ss_ecdh = self.ecdh.to_affine().to_bytes();
+        Params::new()
+            .hash_length(32)
+            .personal(hybrid_kem::HYBRID_KDF_PERSONALIZATION)
+            .to_state()
+            .update(&ss_ecdh)
+            .update(&self.pq_ss)
+            .update(&self.ct_pq)
+            .update(&ephemeral_key.0)
+            .finalize()
+    }
+
+    /// Returns the PQ ciphertext that must be transmitted alongside the encrypted note.
+    pub(crate) fn ct_pq(&self) -> &[u8; PQ_CT_SIZE] {
+        &self.ct_pq
     }
 }
 

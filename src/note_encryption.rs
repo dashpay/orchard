@@ -1,22 +1,26 @@
 //! In-band secret distribution for Orchard bundles.
 
 use alloc::vec::Vec;
+#[cfg(feature = "hybrid-kem")]
+use alloc::boxed::Box;
 use core::fmt;
 use core::marker::PhantomData;
 
 use blake2b_simd::{Hash, Params};
 use group::ff::PrimeField;
+#[cfg(not(feature = "hybrid-kem"))]
+use zcash_note_encryption::{OutPlaintextBytes, OUT_CIPHERTEXT_SIZE, OUT_PLAINTEXT_SIZE};
+
 use zcash_note_encryption::{
     note_bytes::{NoteBytes, NoteBytesData},
-    BatchDomain, Domain, EphemeralKeyBytes, OutPlaintextBytes, OutgoingCipherKey, ShieldedOutput,
-    OUT_PLAINTEXT_SIZE,
+    BatchDomain, Domain, EphemeralKeyBytes, OutgoingCipherKey, ShieldedOutput,
 };
 
 use crate::{
     action::Action,
     keys::{
         DiversifiedTransmissionKey, Diversifier, EphemeralPublicKey, EphemeralSecretKey,
-        OutgoingViewingKey, PreparedEphemeralPublicKey, PreparedIncomingViewingKey, SharedSecret,
+        OutgoingViewingKey, PreparedEphemeralPublicKey, PreparedIncomingViewingKey,
     },
     memo::{MemoSize, ZcashMemo, COMPACT_NOTE_SIZE},
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
@@ -24,7 +28,66 @@ use crate::{
     Address, Note,
 };
 
+#[cfg(not(feature = "hybrid-kem"))]
+use crate::keys::SharedSecret;
+
+#[cfg(feature = "hybrid-kem")]
+use crate::{
+    hybrid_kem::{self, PQ_CT_SIZE},
+    keys::{HybridSharedSecret, PqEncapsulationKey},
+};
+
 const PRF_OCK_ORCHARD_PERSONALIZATION: &[u8; 16] = b"Zcash_Orchardock";
+
+// Hybrid out plaintext/ciphertext sizes (pk_d:32 + esk:32 + ss_pq:32 = 96, + 16 tag = 112)
+#[cfg(feature = "hybrid-kem")]
+const HYBRID_OUT_PLAINTEXT_SIZE: usize = 96;
+#[cfg(feature = "hybrid-kem")]
+const HYBRID_OUT_CIPHERTEXT_SIZE: usize = 112;
+
+/// Outgoing plaintext bytes for hybrid mode: pk_d(32) || esk(32) || ss_pq(32).
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone, Debug)]
+pub struct HybridOutPlaintextBytes(pub [u8; HYBRID_OUT_PLAINTEXT_SIZE]);
+
+#[cfg(feature = "hybrid-kem")]
+impl AsRef<[u8]> for HybridOutPlaintextBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl AsMut<[u8]> for HybridOutPlaintextBytes {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+/// Wrapper for the `DiversifiedTransmissionKey` Domain associated type in hybrid mode.
+///
+/// For encryption, carries the PQ encapsulation key from the recipient's address.
+/// For output recovery, carries the PQ shared secret from the decrypted out_plaintext.
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone, Debug)]
+pub struct OrchardDTK {
+    pub(crate) inner: DiversifiedTransmissionKey,
+    pub(crate) pq: OrchardDTKPq,
+}
+
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone, Debug)]
+pub(crate) enum OrchardDTKPq {
+    /// Normal encryption: encapsulate using this key.
+    Encapsulate(Box<PqEncapsulationKey>),
+    /// Output recovery: use the stored shared secret and ciphertext directly.
+    Recovery {
+        ss_pq: [u8; 32],
+        ct_pq: Box<[u8; PQ_CT_SIZE]>,
+    },
+    /// No PQ context (classic-mode address or compact decryption).
+    None,
+}
 
 /// Defined in [Zcash Protocol Spec section 5.4.2: Pseudo Random Functions][concreteprfs].
 ///
@@ -62,6 +125,13 @@ where
     assert!(plaintext.len() >= COMPACT_NOTE_SIZE);
 
     // Check note plaintext version
+    // Hybrid mode uses 0x03, classic uses 0x02. Accept both for decryption
+    // (the version byte distinguishes transition-period notes).
+    #[cfg(feature = "hybrid-kem")]
+    if plaintext[0] != 0x02 && plaintext[0] != 0x03 {
+        return None;
+    }
+    #[cfg(not(feature = "hybrid-kem"))]
     if plaintext[0] != 0x02 {
         return None;
     }
@@ -77,7 +147,7 @@ where
     let pk_d = get_pk_d(&diversifier);
 
     let recipient = Address::from_parts(diversifier, pk_d);
-    let note = Option::from(Note::from_parts(recipient, value, domain.rho, rseed))?;
+    let note = Option::from(Note::from_parts(recipient.clone(), value, domain.rho, rseed))?;
     Some((note, recipient))
 }
 
@@ -154,10 +224,16 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
     type EphemeralSecretKey = EphemeralSecretKey;
     type EphemeralPublicKey = EphemeralPublicKey;
     type PreparedEphemeralPublicKey = PreparedEphemeralPublicKey;
+    #[cfg(feature = "hybrid-kem")]
+    type SharedSecret = HybridSharedSecret;
+    #[cfg(not(feature = "hybrid-kem"))]
     type SharedSecret = SharedSecret;
     type SymmetricKey = Hash;
     type Note = Note;
     type Recipient = Address;
+    #[cfg(feature = "hybrid-kem")]
+    type DiversifiedTransmissionKey = OrchardDTK;
+    #[cfg(not(feature = "hybrid-kem"))]
     type DiversifiedTransmissionKey = DiversifiedTransmissionKey;
     type IncomingViewingKey = PreparedIncomingViewingKey;
     type OutgoingViewingKey = OutgoingViewingKey;
@@ -170,13 +246,56 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
     type NoteCiphertextBytes = M::NoteCiphertextBytes;
     type CompactNotePlaintextBytes = NoteBytesData<COMPACT_NOTE_SIZE>;
     type CompactNoteCiphertextBytes = NoteBytesData<COMPACT_NOTE_SIZE>;
+    #[cfg(feature = "hybrid-kem")]
+    type OutPlaintextBytes = HybridOutPlaintextBytes;
+    #[cfg(not(feature = "hybrid-kem"))]
+    type OutPlaintextBytes = OutPlaintextBytes;
+    #[cfg(feature = "hybrid-kem")]
+    type OutCiphertextBytes = [u8; HYBRID_OUT_CIPHERTEXT_SIZE];
+    #[cfg(not(feature = "hybrid-kem"))]
+    type OutCiphertextBytes = [u8; OUT_CIPHERTEXT_SIZE];
+
+    fn zero_out_plaintext_bytes() -> Self::OutPlaintextBytes {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            HybridOutPlaintextBytes([0u8; HYBRID_OUT_PLAINTEXT_SIZE])
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            OutPlaintextBytes([0u8; OUT_PLAINTEXT_SIZE])
+        }
+    }
+
+    fn zero_out_ciphertext_bytes() -> Self::OutCiphertextBytes {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            [0u8; HYBRID_OUT_CIPHERTEXT_SIZE]
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            [0u8; OUT_CIPHERTEXT_SIZE]
+        }
+    }
 
     fn derive_esk(note: &Self::Note) -> Option<Self::EphemeralSecretKey> {
         Some(note.esk())
     }
 
     fn get_pk_d(note: &Self::Note) -> Self::DiversifiedTransmissionKey {
-        *note.recipient().pk_d()
+        #[cfg(feature = "hybrid-kem")]
+        {
+            OrchardDTK {
+                inner: *note.recipient().pk_d(),
+                pq: match note.recipient().ek_pq() {
+                    Some(ek) => OrchardDTKPq::Encapsulate(Box::new(ek.clone())),
+                    None => OrchardDTKPq::None,
+                },
+            }
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            *note.recipient().pk_d()
+        }
     }
 
     fn prepare_epk(epk: Self::EphemeralPublicKey) -> Self::PreparedEphemeralPublicKey {
@@ -194,23 +313,123 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         esk: &Self::EphemeralSecretKey,
         pk_d: &Self::DiversifiedTransmissionKey,
     ) -> Self::SharedSecret {
-        esk.agree(pk_d)
+        #[cfg(feature = "hybrid-kem")]
+        {
+            let ecdh_secret = esk.agree(&pk_d.inner);
+            match &pk_d.pq {
+                OrchardDTKPq::Encapsulate(ek_pq) => {
+                    // Encapsulation can only fail if the ek is structurally invalid,
+                    // which should not happen for keys derived from a valid spending key.
+                    // In the unlikely event of failure, fall back to ECDH-only.
+                    match hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness) {
+                        Ok((ct_pq, pq_ss)) => HybridSharedSecret {
+                            ecdh: ecdh_secret.inner(),
+                            pq_ss,
+                            ct_pq,
+                        },
+                        Err(_) => HybridSharedSecret {
+                            ecdh: ecdh_secret.inner(),
+                            pq_ss: [0u8; 32],
+                            ct_pq: [0u8; PQ_CT_SIZE],
+                        },
+                    }
+                }
+                OrchardDTKPq::Recovery { ss_pq, ct_pq } => {
+                    // Recovery path: use stored ss_pq and ct_pq from the output
+                    HybridSharedSecret {
+                        ecdh: ecdh_secret.inner(),
+                        pq_ss: *ss_pq,
+                        ct_pq: **ct_pq,
+                    }
+                }
+                OrchardDTKPq::None => {
+                    // Fallback: ECDH-only shared secret with zero PQ values
+                    HybridSharedSecret {
+                        ecdh: ecdh_secret.inner(),
+                        pq_ss: [0u8; 32],
+                        ct_pq: [0u8; PQ_CT_SIZE],
+                    }
+                }
+            }
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            esk.agree(pk_d)
+        }
     }
 
     fn ka_agree_dec(
         ivk: &Self::IncomingViewingKey,
         epk: &Self::PreparedEphemeralPublicKey,
     ) -> Self::SharedSecret {
-        epk.agree(ivk)
+        #[cfg(feature = "hybrid-kem")]
+        {
+            let ecdh_secret = epk.agree(ivk);
+            // ECDH-only fallback for ka_agree_dec; the PQ path uses ka_agree_dec_with_pq
+            HybridSharedSecret {
+                ecdh: ecdh_secret.inner(),
+                pq_ss: [0u8; 32],
+                ct_pq: [0u8; PQ_CT_SIZE],
+            }
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            epk.agree(ivk)
+        }
+    }
+
+    #[cfg(feature = "hybrid-kem")]
+    fn ka_agree_dec_with_pq(
+        ivk: &Self::IncomingViewingKey,
+        epk: &Self::PreparedEphemeralPublicKey,
+        pq_ct: Option<&[u8]>,
+    ) -> Self::SharedSecret {
+        let ecdh_secret = epk.agree(ivk);
+        if let Some(ct_bytes) = pq_ct {
+            if let (Some(pq_dk), Ok(ct_arr)) = (
+                ivk.pq_dk.as_ref(),
+                <&[u8; PQ_CT_SIZE]>::try_from(ct_bytes),
+            ) {
+                let pq_ss = hybrid_kem::decapsulate(&pq_dk.0, ct_arr);
+                let mut ct_pq = [0u8; PQ_CT_SIZE];
+                ct_pq.copy_from_slice(ct_bytes);
+                return HybridSharedSecret {
+                    ecdh: ecdh_secret.inner(),
+                    pq_ss,
+                    ct_pq,
+                };
+            }
+        }
+        // Fallback: ECDH only
+        HybridSharedSecret {
+            ecdh: ecdh_secret.inner(),
+            pq_ss: [0u8; 32],
+            ct_pq: [0u8; PQ_CT_SIZE],
+        }
     }
 
     fn kdf(secret: Self::SharedSecret, ephemeral_key: &EphemeralKeyBytes) -> Self::SymmetricKey {
-        secret.kdf_orchard(ephemeral_key)
+        #[cfg(feature = "hybrid-kem")]
+        {
+            secret.kdf_hybrid(ephemeral_key)
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            secret.kdf_orchard(ephemeral_key)
+        }
     }
 
     fn note_plaintext_bytes(note: &Self::Note, memo: &Self::Memo) -> Self::NotePlaintextBytes {
         let mut np = [0u8; COMPACT_NOTE_SIZE];
-        np[0] = 0x02;
+        // Version byte: 0x03 for hybrid, 0x02 for classic
+        #[cfg(feature = "hybrid-kem")]
+        {
+            np[0] = 0x03;
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            np[0] = 0x02;
+        }
         np[1..12].copy_from_slice(note.recipient().diversifier().as_array());
         np[12..20].copy_from_slice(&note.value().to_bytes());
         np[20..COMPACT_NOTE_SIZE].copy_from_slice(note.rseed().as_bytes());
@@ -234,11 +453,29 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
     fn outgoing_plaintext_bytes(
         note: &Self::Note,
         esk: &Self::EphemeralSecretKey,
-    ) -> OutPlaintextBytes {
-        let mut op = [0; OUT_PLAINTEXT_SIZE];
-        op[..32].copy_from_slice(&note.recipient().pk_d().to_bytes());
-        op[32..].copy_from_slice(&esk.0.to_repr());
-        OutPlaintextBytes(op)
+    ) -> Self::OutPlaintextBytes {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            let mut op = [0u8; HYBRID_OUT_PLAINTEXT_SIZE];
+            op[..32].copy_from_slice(&note.recipient().pk_d().to_bytes());
+            op[32..64].copy_from_slice(&esk.ecdh.to_repr());
+            // Re-derive ss_pq deterministically from ek_pq + pq_randomness
+            if let Some(ek_pq) = note.recipient().ek_pq() {
+                if let Ok((_, ss_pq)) =
+                    hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness)
+                {
+                    op[64..96].copy_from_slice(&ss_pq);
+                }
+            }
+            HybridOutPlaintextBytes(op)
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            let mut op = [0; OUT_PLAINTEXT_SIZE];
+            op[..32].copy_from_slice(&note.recipient().pk_d().to_bytes());
+            op[32..].copy_from_slice(&esk.ecdh.to_repr());
+            OutPlaintextBytes(op)
+        }
     }
 
     fn epk_bytes(epk: &Self::EphemeralPublicKey) -> EphemeralKeyBytes {
@@ -268,7 +505,16 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         pk_d: &Self::DiversifiedTransmissionKey,
         plaintext: &Self::CompactNotePlaintextBytes,
     ) -> Option<(Self::Note, Self::Recipient)> {
-        orchard_parse_note_plaintext_without_memo(&self.base, plaintext.as_ref(), |_| *pk_d)
+        #[cfg(feature = "hybrid-kem")]
+        {
+            orchard_parse_note_plaintext_without_memo(&self.base, plaintext.as_ref(), |_| {
+                pk_d.inner
+            })
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            orchard_parse_note_plaintext_without_memo(&self.base, plaintext.as_ref(), |_| *pk_d)
+        }
     }
 
     fn split_plaintext_at_memo(
@@ -284,13 +530,61 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         Some((compact, memo))
     }
 
-    fn extract_pk_d(out_plaintext: &OutPlaintextBytes) -> Option<Self::DiversifiedTransmissionKey> {
-        DiversifiedTransmissionKey::from_bytes(out_plaintext.0[0..32].try_into().unwrap()).into()
+    fn extract_pk_d(
+        out_plaintext: &Self::OutPlaintextBytes,
+    ) -> Option<Self::DiversifiedTransmissionKey> {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            // Use extract_pk_d_for_recovery with no PQ ciphertext
+            Self::extract_pk_d_for_recovery(out_plaintext, None)
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            DiversifiedTransmissionKey::from_bytes(out_plaintext.0[0..32].try_into().unwrap())
+                .into()
+        }
     }
 
-    fn extract_esk(out_plaintext: &OutPlaintextBytes) -> Option<Self::EphemeralSecretKey> {
-        EphemeralSecretKey::from_bytes(out_plaintext.0[32..OUT_PLAINTEXT_SIZE].try_into().unwrap())
+    #[cfg(feature = "hybrid-kem")]
+    fn extract_pk_d_for_recovery(
+        out_plaintext: &Self::OutPlaintextBytes,
+        pq_ciphertext: Option<&[u8]>,
+    ) -> Option<Self::DiversifiedTransmissionKey> {
+        let pk_d =
+            DiversifiedTransmissionKey::from_bytes(out_plaintext.0[0..32].try_into().unwrap());
+        let pk_d: Option<DiversifiedTransmissionKey> = pk_d.into();
+        pk_d.map(|inner| {
+            // Extract ss_pq from the out plaintext for recovery
+            let mut ss_pq = [0u8; 32];
+            ss_pq.copy_from_slice(&out_plaintext.0[64..96]);
+            // Extract ct_pq from the output for the KDF
+            let mut ct_pq = [0u8; PQ_CT_SIZE];
+            if let Some(ct) = pq_ciphertext {
+                if ct.len() == PQ_CT_SIZE {
+                    ct_pq.copy_from_slice(ct);
+                }
+            }
+            OrchardDTK {
+                inner,
+                pq: OrchardDTKPq::Recovery { ss_pq, ct_pq: Box::new(ct_pq) },
+            }
+        })
+    }
+
+    fn extract_esk(
+        out_plaintext: &Self::OutPlaintextBytes,
+    ) -> Option<Self::EphemeralSecretKey> {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            EphemeralSecretKey::from_bytes(out_plaintext.0[32..64].try_into().unwrap()).into()
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            EphemeralSecretKey::from_bytes(
+                out_plaintext.0[32..OUT_PLAINTEXT_SIZE].try_into().unwrap(),
+            )
             .into()
+        }
     }
 }
 
@@ -298,14 +592,27 @@ impl<M: MemoSize> BatchDomain for OrchardDomain<M> {
     fn batch_kdf<'a>(
         items: impl Iterator<Item = (Option<Self::SharedSecret>, &'a EphemeralKeyBytes)>,
     ) -> Vec<Option<Self::SymmetricKey>> {
-        let (shared_secrets, ephemeral_keys): (Vec<_>, Vec<_>) = items.unzip();
+        #[cfg(feature = "hybrid-kem")]
+        {
+            // In hybrid mode, each shared secret may carry PQ data, so we KDF individually.
+            items
+                .map(|(secret, ephemeral_key)| {
+                    secret.map(|s| s.kdf_hybrid(ephemeral_key))
+                })
+                .collect()
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            let (shared_secrets, ephemeral_keys): (Vec<_>, Vec<_>) = items.unzip();
 
-        SharedSecret::batch_to_affine(shared_secrets)
-            .zip(ephemeral_keys)
-            .map(|(secret, ephemeral_key)| {
-                secret.map(|dhsecret| SharedSecret::kdf_orchard_inner(dhsecret, ephemeral_key))
-            })
-            .collect()
+            SharedSecret::batch_to_affine(shared_secrets)
+                .zip(ephemeral_keys)
+                .map(|(secret, ephemeral_key)| {
+                    secret
+                        .map(|dhsecret| SharedSecret::kdf_orchard_inner(dhsecret, ephemeral_key))
+                })
+                .collect()
+        }
     }
 }
 
@@ -332,6 +639,11 @@ impl<T, M: MemoSize> ShieldedOutput<OrchardDomain<M>> for Action<T, M> {
         )
         .expect("enc_ciphertext is at least COMPACT_NOTE_SIZE bytes")
     }
+
+    #[cfg(feature = "hybrid-kem")]
+    fn pq_ciphertext(&self) -> Option<&[u8]> {
+        Some(&self.encrypted_note().ct_pq)
+    }
 }
 
 impl ShieldedOutput<OrchardDomain<ZcashMemo>> for crate::pczt::Action {
@@ -352,6 +664,11 @@ impl ShieldedOutput<OrchardDomain<ZcashMemo>> for crate::pczt::Action {
             &self.output().encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE],
         )
         .expect("enc_ciphertext is at least COMPACT_NOTE_SIZE bytes")
+    }
+
+    #[cfg(feature = "hybrid-kem")]
+    fn pq_ciphertext(&self) -> Option<&[u8]> {
+        Some(&self.output().encrypted_note().ct_pq)
     }
 }
 
@@ -471,8 +788,8 @@ pub mod testing {
             }
         };
         let note = Note::from_parts(recipient, value, rho, rseed).unwrap();
-        let encryptor = OrchardNoteEncryption::<ZcashMemo>::new(ovk, note, [0u8; 512]);
         let cmx = ExtractedNoteCommitment::from(note.commitment());
+        let encryptor = OrchardNoteEncryption::<ZcashMemo>::new(ovk, note.clone(), [0u8; 512]);
         let ephemeral_key = OrchardDomain::<ZcashMemo>::epk_bytes(encryptor.epk());
         let enc_ciphertext = encryptor.encrypt_note_plaintext();
 
@@ -488,7 +805,10 @@ pub mod testing {
     }
 }
 
-#[cfg(test)]
+// The test_vectors test uses classic Orchard test vectors (version byte 0x02,
+// 80-byte out_ciphertext) which are incompatible with hybrid mode sizes.
+// Hybrid-specific encryption tests are in Phase 8.
+#[cfg(all(test, not(feature = "hybrid-kem")))]
 mod tests {
     use rand::rngs::OsRng;
     use zcash_note_encryption::{
@@ -554,7 +874,7 @@ mod tests {
             assert_eq!(ock.as_ref(), tv.ock);
 
             let recipient = Address::from_parts(d, pk_d);
-            let note = Note::from_parts(recipient, value, rho, rseed).unwrap();
+            let note = Note::from_parts(recipient.clone(), value, rho, rseed).unwrap();
             assert_eq!(ExtractedNoteCommitment::from(note.commitment()), cmx);
 
             let action: Action<(), ZcashMemo> = Action::from_parts(
@@ -619,5 +939,255 @@ mod tests {
                 &tv.c_out[..]
             );
         }
+    }
+}
+
+#[cfg(all(test, feature = "hybrid-kem"))]
+mod hybrid_tests {
+    use rand::rngs::OsRng;
+    use zcash_note_encryption::{
+        try_compact_note_decryption, try_note_decryption, try_output_recovery_with_ovk,
+    };
+
+    use super::{CompactAction, OrchardDomain};
+    use crate::{
+        keys::{FullViewingKey, PreparedIncomingViewingKey, Scope, SpendingKey},
+        memo::ZcashMemo,
+        note::{Nullifier, Rho},
+        value::NoteValue,
+        Note,
+    };
+
+    fn test_key_material() -> (SpendingKey, FullViewingKey) {
+        let sk = SpendingKey::from_bytes([7; 32]).unwrap();
+        let fvk = FullViewingKey::from(&sk);
+        (sk, fvk)
+    }
+
+    /// Test that hybrid mode encrypts and decrypts correctly with the IVK.
+    #[test]
+    fn hybrid_round_trip_ivk() {
+        let mut rng = OsRng;
+        let (_, fvk) = test_key_material();
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        let nf = Nullifier::dummy(&mut rng);
+        let rho = Rho::from_nf_old(nf);
+        let note = Note::new(recipient, NoteValue::from_raw(42), rho, &mut rng);
+
+        let ne = super::OrchardNoteEncryption::<ZcashMemo>::new(
+            Some(fvk.to_ovk(Scope::External)),
+            note.clone(),
+            [0u8; 512],
+        );
+
+        let esk = note.esk();
+        let epk = esk.derive_public(note.recipient().g_d());
+        let epk_bytes = epk.to_bytes();
+
+        let enc_ciphertext = ne.encrypt_note_plaintext();
+
+        let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
+        let cv_net = crate::value::ValueCommitment::derive(
+            NoteValue::from_raw(42) - NoteValue::zero(),
+            crate::value::ValueCommitTrapdoor::random(&mut rng),
+        );
+
+        let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
+
+        // Derive ct_pq deterministically from note
+        let note_esk = note.esk();
+        let note_recipient = note.recipient();
+        let ek_pq = note_recipient.ek_pq().expect("hybrid address has ek_pq");
+        let (ct_pq, _) =
+            crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
+                .expect("encapsulation should succeed");
+
+        let action: crate::action::Action<(), ZcashMemo> = crate::action::Action::from_parts(
+            nf,
+            crate::primitives::redpallas::VerificationKey::dummy(),
+            cmx,
+            crate::note::TransmittedNoteCiphertext::from_parts(
+                epk_bytes.0,
+                enc_ciphertext,
+                ct_pq,
+                out_ciphertext,
+            ),
+            cv_net,
+            (),
+        );
+
+        // Decrypt with IVK (has PQ dk via FVK chain)
+        let ivk = fvk.to_ivk(Scope::External);
+        let prepared_ivk = PreparedIncomingViewingKey::new(&ivk);
+        let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
+
+        let result = try_note_decryption(&domain, &prepared_ivk, &action);
+        assert!(result.is_some(), "Hybrid note decryption should succeed");
+        let (decrypted_note, decrypted_addr, decrypted_memo) = result.expect("decryption");
+        assert_eq!(decrypted_note.value(), note.value());
+        assert_eq!(decrypted_addr, note.recipient());
+        assert_eq!(&decrypted_memo[..], &[0u8; 512][..]);
+    }
+
+    /// Compact decryption uses ECDH-only, which produces a different KDF result
+    /// than the hybrid KDF used to encrypt. Compact decryption of hybrid notes
+    /// will fail — light clients need full actions with ct_pq.
+    #[test]
+    fn hybrid_compact_decryption_fails() {
+        let mut rng = OsRng;
+        let (_, fvk) = test_key_material();
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        let nf = Nullifier::dummy(&mut rng);
+        let rho = Rho::from_nf_old(nf);
+        let note = Note::new(recipient, NoteValue::from_raw(100), rho, &mut rng);
+
+        let ne = super::OrchardNoteEncryption::<ZcashMemo>::new(None, note.clone(), [0u8; 512]);
+
+        let esk = note.esk();
+        let epk = esk.derive_public(note.recipient().g_d());
+        let epk_bytes = epk.to_bytes();
+        let enc_ciphertext = ne.encrypt_note_plaintext();
+
+        let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
+        let cv_net = crate::value::ValueCommitment::derive(
+            NoteValue::from_raw(100) - NoteValue::zero(),
+            crate::value::ValueCommitTrapdoor::random(&mut rng),
+        );
+
+        let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
+
+        let note_esk = note.esk();
+        let note_recipient = note.recipient();
+        let ek_pq = note_recipient.ek_pq().expect("hybrid address has ek_pq");
+        let (ct_pq, _) =
+            crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
+                .expect("encapsulation should succeed");
+
+        let action: crate::action::Action<(), ZcashMemo> = crate::action::Action::from_parts(
+            nf,
+            crate::primitives::redpallas::VerificationKey::dummy(),
+            cmx,
+            crate::note::TransmittedNoteCiphertext::from_parts(
+                epk_bytes.0,
+                enc_ciphertext,
+                ct_pq,
+                out_ciphertext,
+            ),
+            cv_net,
+            (),
+        );
+
+        let ivk = fvk.to_ivk(Scope::External);
+        let prepared_ivk = PreparedIncomingViewingKey::new(&ivk);
+        let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
+
+        // Compact decryption should fail for hybrid notes
+        let compact = CompactAction::from(&action);
+        let result = try_compact_note_decryption(&domain, &prepared_ivk, &compact);
+        assert!(
+            result.is_none(),
+            "Compact decryption should fail for hybrid notes (different KDF)"
+        );
+    }
+
+    /// Test output recovery with OVK in hybrid mode.
+    #[test]
+    fn hybrid_output_recovery_ovk() {
+        let mut rng = OsRng;
+        let (_, fvk) = test_key_material();
+        let recipient = fvk.address_at(0u32, Scope::External);
+        let ovk = fvk.to_ovk(Scope::External);
+
+        let nf = Nullifier::dummy(&mut rng);
+        let rho = Rho::from_nf_old(nf);
+        let note = Note::new(recipient, NoteValue::from_raw(500), rho, &mut rng);
+
+        let ne = super::OrchardNoteEncryption::<ZcashMemo>::new(
+            Some(ovk.clone()),
+            note.clone(),
+            [42u8; 512],
+        );
+
+        let esk = note.esk();
+        let epk = esk.derive_public(note.recipient().g_d());
+        let epk_bytes = epk.to_bytes();
+        let enc_ciphertext = ne.encrypt_note_plaintext();
+
+        let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
+        let cv_net = crate::value::ValueCommitment::derive(
+            NoteValue::from_raw(500) - NoteValue::zero(),
+            crate::value::ValueCommitTrapdoor::random(&mut rng),
+        );
+
+        let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
+
+        let note_esk = note.esk();
+        let note_recipient = note.recipient();
+        let ek_pq = note_recipient.ek_pq().expect("hybrid address has ek_pq");
+        let (ct_pq, _) =
+            crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &note_esk.pq_randomness)
+                .expect("encapsulation should succeed");
+
+        let action: crate::action::Action<(), ZcashMemo> = crate::action::Action::from_parts(
+            nf,
+            crate::primitives::redpallas::VerificationKey::dummy(),
+            cmx,
+            crate::note::TransmittedNoteCiphertext::from_parts(
+                epk_bytes.0,
+                enc_ciphertext,
+                ct_pq,
+                out_ciphertext,
+            ),
+            cv_net.clone(),
+            (),
+        );
+
+        let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
+        let result =
+            try_output_recovery_with_ovk(&domain, &ovk, &action, &cv_net, &out_ciphertext);
+        assert!(
+            result.is_some(),
+            "Hybrid output recovery with OVK should succeed"
+        );
+        let (recovered_note, recovered_addr, recovered_memo) = result.expect("recovery");
+        assert_eq!(recovered_note.value(), note.value());
+        assert_eq!(recovered_addr, note.recipient());
+        assert_eq!(&recovered_memo[..], &[42u8; 512][..]);
+    }
+
+    /// Test that PQ key derivation from spending key is deterministic.
+    #[test]
+    fn hybrid_key_derivation_deterministic() {
+        let sk = SpendingKey::from_bytes([7; 32]).unwrap();
+        let fvk1 = FullViewingKey::from(&sk);
+        let fvk2 = FullViewingKey::from(&sk);
+
+        let addr1 = fvk1.address_at(0u32, Scope::External);
+        let addr2 = fvk2.address_at(0u32, Scope::External);
+
+        assert_eq!(addr1, addr2);
+        assert_eq!(
+            addr1.ek_pq().expect("has ek_pq").to_bytes(),
+            addr2.ek_pq().expect("has ek_pq").to_bytes(),
+        );
+    }
+
+    /// Test that different spending keys produce different PQ keys.
+    #[test]
+    fn hybrid_different_keys_different_pq() {
+        let sk1 = SpendingKey::from_bytes([7; 32]).unwrap();
+        let sk2 = SpendingKey::from_bytes([8; 32]).unwrap();
+        let fvk1 = FullViewingKey::from(&sk1);
+        let fvk2 = FullViewingKey::from(&sk2);
+
+        let addr1 = fvk1.address_at(0u32, Scope::External);
+        let addr2 = fvk2.address_at(0u32, Scope::External);
+
+        assert_ne!(
+            addr1.ek_pq().expect("has ek_pq").to_bytes(),
+            addr2.ek_pq().expect("has ek_pq").to_bytes(),
+        );
     }
 }

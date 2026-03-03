@@ -50,6 +50,8 @@ pub(crate) fn hash_bundle_txid_data<A: Authorization, V: Copy + Into<i64>, M: Me
         nh.update(&action.cv_net().to_bytes());
         nh.update(&<[u8; 32]>::from(action.rk()));
         nh.update(&enc[aead_tag_start..]);
+        #[cfg(feature = "hybrid-kem")]
+        nh.update(&action.encrypted_note().ct_pq);
         nh.update(&action.encrypted_note().out_ciphertext);
     }
 

@@ -376,17 +376,40 @@ impl<M: MemoSize> OutputInfo<M> {
         mut rng: impl RngCore,
     ) -> (Note, ExtractedNoteCommitment, TransmittedNoteCiphertext<M>) {
         let rho = Rho::from_nf_old(nf_old);
-        let note = Note::new(self.recipient, self.value, rho, &mut rng);
+        let note = Note::new(self.recipient.clone(), self.value, rho, &mut rng);
         let cm_new = note.commitment();
         let cmx = cm_new.into();
 
-        let encryptor = OrchardNoteEncryption::<M>::new(self.ovk.clone(), note, self.memo.clone());
+        let encryptor =
+            OrchardNoteEncryption::<M>::new(self.ovk.clone(), note.clone(), self.memo.clone());
 
-        let encrypted_note = TransmittedNoteCiphertext::from_parts(
-            encryptor.epk().to_bytes().0,
-            encryptor.encrypt_note_plaintext(),
-            encryptor.encrypt_outgoing_plaintext(cv_net, &cmx, &mut rng),
-        );
+        let epk_bytes = encryptor.epk().to_bytes().0;
+        let enc_ciphertext = encryptor.encrypt_note_plaintext();
+        let out_ciphertext = encryptor.encrypt_outgoing_plaintext(cv_net, &cmx, &mut rng);
+
+        #[cfg(feature = "hybrid-kem")]
+        let encrypted_note = {
+            // Deterministic encapsulation produces the same ct_pq as ka_agree_enc did.
+            let esk = note.esk();
+            let recipient = note.recipient();
+            // In hybrid mode, all addresses derived from FullViewingKey::address_at()
+            // will have ek_pq. If this panics, the address was constructed incorrectly.
+            let ct_pq = match recipient.ek_pq() {
+                Some(ek_pq) => {
+                    let (ct_pq, _) = crate::hybrid_kem::encapsulate_deterministic(
+                        &ek_pq.0,
+                        &esk.pq_randomness,
+                    )
+                    .expect("encapsulation with a valid key should not fail");
+                    ct_pq
+                }
+                None => [0u8; crate::hybrid_kem::PQ_CT_SIZE],
+            };
+            TransmittedNoteCiphertext::from_parts(epk_bytes, enc_ciphertext, ct_pq, out_ciphertext)
+        };
+        #[cfg(not(feature = "hybrid-kem"))]
+        let encrypted_note =
+            TransmittedNoteCiphertext::from_parts(epk_bytes, enc_ciphertext, out_ciphertext);
 
         (note, cmx, encrypted_note)
     }
@@ -1355,7 +1378,7 @@ pub mod testing {
             output_amounts in vec(
                 arb_address().prop_flat_map(move |a| {
                     arb_positive_note_value(MAX_NOTE_VALUE / n_outputs as u64)
-                        .prop_map(move |v| (a, v))
+                        .prop_map(move |v| (a.clone(), v))
                 }),
                 n_outputs as usize
             ),
@@ -1374,7 +1397,7 @@ pub mod testing {
                     .ok()
                     .flatten()
                     .expect("we can always construct a correct Merkle path");
-                notes_and_auth_paths.push((*note, path.into()));
+                notes_and_auth_paths.push((note.clone(), path.into()));
             }
 
             ArbitraryBundleInputs {

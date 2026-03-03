@@ -35,6 +35,8 @@ pub mod circuit;
 mod constants;
 #[cfg(feature = "unstable-voting-circuits")]
 pub mod constants;
+#[cfg(feature = "hybrid-kem")]
+pub mod hybrid_kem;
 pub mod keys;
 pub mod memo;
 pub mod note;

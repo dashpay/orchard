@@ -241,8 +241,16 @@ pub(crate) mod testing {
                 spend_value - output_value,
                 ValueCommitTrapdoor::zero()
             );
+            #[cfg(not(feature = "hybrid-kem"))]
             let encrypted_note =
                 encrypted_note_for(note, &cv_net, &cmx, StdRng::from_seed(rng_seed));
+            #[cfg(feature = "hybrid-kem")]
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 1088],
+                [0u8; 112],
+            );
             Action {
                 nf,
                 rk,
@@ -270,8 +278,16 @@ pub(crate) mod testing {
                 ValueCommitTrapdoor::zero()
             );
 
+            #[cfg(not(feature = "hybrid-kem"))]
             let encrypted_note =
                 encrypted_note_for(note, &cv_net, &cmx, StdRng::from_seed(enc_rng_seed));
+            #[cfg(feature = "hybrid-kem")]
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 1088],
+                [0u8; 112],
+            );
 
             let rng = StdRng::from_seed(rng_seed);
 

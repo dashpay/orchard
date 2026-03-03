@@ -48,7 +48,7 @@ fn bench_note_decryption(c: &mut Criterion) {
         // The builder pads to two actions, and shuffles their order. Add two recipients
         // so the first action is always decryptable.
         builder
-            .add_output(None, recipient, NoteValue::from_raw(10), [0; 512])
+            .add_output(None, recipient.clone(), NoteValue::from_raw(10), [0; 512])
             .unwrap();
         builder
             .add_output(None, recipient, NoteValue::from_raw(10), [0; 512])

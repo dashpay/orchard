@@ -5,6 +5,9 @@ use crate::{
     spec::{diversify_hash, NonIdentityPallasPoint},
 };
 
+#[cfg(feature = "hybrid-kem")]
+use crate::keys::PqEncapsulationKey;
+
 /// A shielded payment address.
 ///
 /// # Examples
@@ -15,11 +18,26 @@ use crate::{
 /// let sk = SpendingKey::from_bytes([7; 32]).unwrap();
 /// let address = FullViewingKey::from(&sk).address_at(0u32, Scope::External);
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Address {
     d: Diversifier,
     pk_d: DiversifiedTransmissionKey,
+    #[cfg(feature = "hybrid-kem")]
+    ek_pq: Option<PqEncapsulationKey>,
 }
+
+// Address identity is determined by (d, pk_d) only.
+// The PQ encapsulation key is supplementary transport encryption, not part of the
+// cryptographic address identity. Two addresses with the same diversifier and
+// diversified transmission key are the same address regardless of ek_pq.
+impl PartialEq for Address {
+    fn eq(&self, other: &Self) -> bool {
+        self.d == other.d && self.pk_d == other.pk_d
+    }
+}
+
+impl Eq for Address {}
+
 
 impl Address {
     pub(crate) fn from_parts(d: Diversifier, pk_d: DiversifiedTransmissionKey) -> Self {
@@ -27,7 +45,32 @@ impl Address {
         // internal APIs. For parsing from raw byte encodings, we assume that users aren't
         // modifying internals of encoded address formats. If they do, that can result in
         // lost funds, but we can't defend against that from here.
-        Address { d, pk_d }
+        Address {
+            d,
+            pk_d,
+            #[cfg(feature = "hybrid-kem")]
+            ek_pq: None,
+        }
+    }
+
+    /// Creates an address with a PQ encapsulation key for hybrid KEM.
+    #[cfg(feature = "hybrid-kem")]
+    pub(crate) fn from_parts_with_pq(
+        d: Diversifier,
+        pk_d: DiversifiedTransmissionKey,
+        ek_pq: PqEncapsulationKey,
+    ) -> Self {
+        Address {
+            d,
+            pk_d,
+            ek_pq: Some(ek_pq),
+        }
+    }
+
+    /// Returns the PQ encapsulation key, if present.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn ek_pq(&self) -> Option<&PqEncapsulationKey> {
+        self.ek_pq.as_ref()
     }
 
     /// Returns the [`Diversifier`] for this `Address`.
@@ -61,7 +104,7 @@ impl Address {
     ///
     /// [orchardpaymentaddrencoding]: https://zips.z.cash/protocol/protocol.pdf#orchardpaymentaddrencoding
     pub fn from_raw_address_bytes(bytes: &[u8; 43]) -> CtOption<Self> {
-        DiversifiedTransmissionKey::from_bytes(bytes[11..].try_into().unwrap()).map(|pk_d| {
+        DiversifiedTransmissionKey::from_bytes(bytes[11..43].try_into().unwrap()).map(|pk_d| {
             let d = Diversifier::from_bytes(bytes[..11].try_into().unwrap());
             Self::from_parts(d, pk_d)
         })

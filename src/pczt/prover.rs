@@ -41,6 +41,7 @@ impl<M: MemoSize> super::Bundle<M> {
                     action
                         .spend
                         .recipient
+                        .clone()
                         .ok_or(ProverError::MissingRecipient)?,
                     action.spend.value.ok_or(ProverError::MissingValue)?,
                     action.spend.rho.ok_or(ProverError::MissingRho)?,
@@ -62,6 +63,7 @@ impl<M: MemoSize> super::Bundle<M> {
                     action
                         .output
                         .recipient
+                        .clone()
                         .ok_or(ProverError::MissingRecipient)?,
                     action.output.value.ok_or(ProverError::MissingValue)?,
                     Rho::from_nf_old(action.spend.nullifier),

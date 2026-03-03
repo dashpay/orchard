@@ -139,7 +139,7 @@ impl RandomSeed {
 }
 
 /// A discrete amount of funds received by an address.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Note {
     /// The recipient of the funds.
     recipient: Address,
@@ -193,7 +193,8 @@ impl Note {
             rho,
             rseed,
         };
-        CtOption::new(note, note.commitment_inner().is_some())
+        let has_commitment = note.commitment_inner().is_some();
+        CtOption::new(note, has_commitment)
     }
 
     /// Generates a new note.
@@ -209,7 +210,12 @@ impl Note {
         mut rng: impl RngCore,
     ) -> Self {
         loop {
-            let note = Note::from_parts(recipient, value, rho, RandomSeed::random(&mut rng, &rho));
+            let note = Note::from_parts(
+                recipient.clone(),
+                value,
+                rho,
+                RandomSeed::random(&mut rng, &rho),
+            );
             if note.is_some().into() {
                 break note.unwrap();
             }
@@ -242,7 +248,7 @@ impl Note {
 
     /// Returns the recipient of this note.
     pub fn recipient(&self) -> Address {
-        self.recipient
+        self.recipient.clone()
     }
 
     /// Returns the value of this note.
@@ -257,7 +263,25 @@ impl Note {
 
     /// Derives the ephemeral secret key for this note.
     pub(crate) fn esk(&self) -> EphemeralSecretKey {
-        EphemeralSecretKey(self.rseed.esk(&self.rho))
+        EphemeralSecretKey {
+            ecdh: self.rseed.esk(&self.rho),
+            #[cfg(feature = "hybrid-kem")]
+            pq_randomness: {
+                // Bind encapsulation randomness to the recipient's PQ key.
+                // If the address lacks ek_pq (classic address in hybrid build),
+                // use a zero key — encapsulation won't be performed anyway.
+                let ek_pq = self
+                    .recipient
+                    .ek_pq()
+                    .map(|ek| ek.0)
+                    .unwrap_or([0u8; crate::hybrid_kem::PQ_EK_SIZE]);
+                crate::hybrid_kem::derive_pq_encaps_randomness(
+                    self.rseed.as_bytes(),
+                    &self.rho.to_bytes(),
+                    &ek_pq,
+                )
+            },
+        }
     }
 
     /// Returns rho of this note.
@@ -315,14 +339,23 @@ pub struct TransmittedNoteCiphertext<M: MemoSize = ZcashMemo> {
     pub epk_bytes: [u8; 32],
     /// The encrypted note ciphertext
     pub enc_ciphertext: M::NoteCiphertextBytes,
+    /// The ML-KEM-768 ciphertext (hybrid mode only).
+    #[cfg(feature = "hybrid-kem")]
+    pub ct_pq: [u8; 1088],
     /// An encrypted value that allows the holder of the outgoing cipher
     /// key for the note to recover the note plaintext.
+    #[cfg(feature = "hybrid-kem")]
+    pub out_ciphertext: [u8; 112],
+    /// An encrypted value that allows the holder of the outgoing cipher
+    /// key for the note to recover the note plaintext.
+    #[cfg(not(feature = "hybrid-kem"))]
     pub out_ciphertext: [u8; 80],
     _memo: PhantomData<M>,
 }
 
 impl<M: MemoSize> TransmittedNoteCiphertext<M> {
-    /// Constructs a `TransmittedNoteCiphertext` from its parts.
+    /// Constructs a `TransmittedNoteCiphertext` from its parts (classic mode).
+    #[cfg(not(feature = "hybrid-kem"))]
     pub fn from_parts(
         epk_bytes: [u8; 32],
         enc_ciphertext: M::NoteCiphertextBytes,
@@ -335,15 +368,34 @@ impl<M: MemoSize> TransmittedNoteCiphertext<M> {
             _memo: PhantomData,
         }
     }
+
+    /// Constructs a `TransmittedNoteCiphertext` from its parts (hybrid mode).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn from_parts(
+        epk_bytes: [u8; 32],
+        enc_ciphertext: M::NoteCiphertextBytes,
+        ct_pq: [u8; 1088],
+        out_ciphertext: [u8; 112],
+    ) -> Self {
+        Self {
+            epk_bytes,
+            enc_ciphertext,
+            ct_pq,
+            out_ciphertext,
+            _memo: PhantomData,
+        }
+    }
 }
 
 impl<M: MemoSize> fmt::Debug for TransmittedNoteCiphertext<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TransmittedNoteCiphertext")
-            .field("epk_bytes", &self.epk_bytes)
+        let mut s = f.debug_struct("TransmittedNoteCiphertext");
+        s.field("epk_bytes", &self.epk_bytes)
             .field("enc_ciphertext", &hex::encode(self.enc_ciphertext.as_ref()))
-            .field("out_ciphertext", &hex::encode(self.out_ciphertext))
-            .finish()
+            .field("out_ciphertext", &hex::encode(self.out_ciphertext));
+        #[cfg(feature = "hybrid-kem")]
+        s.field("ct_pq", &hex::encode(self.ct_pq));
+        s.finish()
     }
 }
 

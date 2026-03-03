@@ -217,6 +217,7 @@ impl<M: MemoSize> Output<M> {
         ephemeral_key: [u8; 32],
         enc_ciphertext: Vec<u8>,
         out_ciphertext: Vec<u8>,
+        #[cfg(feature = "hybrid-kem")] ct_pq: Option<[u8; 1088]>,
         recipient: Option<[u8; 43]>,
         value: Option<u64>,
         rseed: Option<[u8; 32]>,
@@ -231,15 +232,32 @@ impl<M: MemoSize> Output<M> {
 
         let enc_ciphertext_bytes = NoteBytes::from_slice(enc_ciphertext.as_slice())
             .ok_or(ParseError::InvalidEncCiphertext)?;
-        let out_ciphertext_bytes: [u8; 80] = out_ciphertext
-            .as_slice()
-            .try_into()
-            .map_err(|_| ParseError::InvalidOutCiphertext)?;
-        let encrypted_note = TransmittedNoteCiphertext::from_parts(
-            ephemeral_key,
-            enc_ciphertext_bytes,
-            out_ciphertext_bytes,
-        );
+        #[cfg(not(feature = "hybrid-kem"))]
+        let encrypted_note = {
+            let out_ciphertext_bytes: [u8; 80] = out_ciphertext
+                .as_slice()
+                .try_into()
+                .map_err(|_| ParseError::InvalidOutCiphertext)?;
+            TransmittedNoteCiphertext::from_parts(
+                ephemeral_key,
+                enc_ciphertext_bytes,
+                out_ciphertext_bytes,
+            )
+        };
+        #[cfg(feature = "hybrid-kem")]
+        let encrypted_note = {
+            let ct_pq = ct_pq.ok_or(ParseError::MissingPqCiphertext)?;
+            let out_ciphertext_bytes: [u8; 112] = out_ciphertext
+                .as_slice()
+                .try_into()
+                .map_err(|_| ParseError::InvalidOutCiphertext)?;
+            TransmittedNoteCiphertext::from_parts(
+                ephemeral_key,
+                enc_ciphertext_bytes,
+                ct_pq,
+                out_ciphertext_bytes,
+            )
+        };
 
         let recipient = recipient
             .as_ref()
@@ -334,6 +352,9 @@ pub enum ParseError {
     InvalidWitness,
     /// An invalid `zip32_derivation` was provided.
     InvalidZip32Derivation,
+    /// `ct_pq` must be provided in hybrid-kem mode.
+    #[cfg(feature = "hybrid-kem")]
+    MissingPqCiphertext,
     /// `rho` must be provided whenever `rseed` is provided.
     MissingRho,
     /// The provided `flags` field had unexpected bits set.
@@ -360,6 +381,10 @@ impl fmt::Display for ParseError {
             ParseError::InvalidValueCommitTrapdoor => write!(f, "invalid `rcv`"),
             ParseError::InvalidWitness => write!(f, "invalid `witness`"),
             ParseError::InvalidZip32Derivation => write!(f, "invalid `zip32_derivation`"),
+            #[cfg(feature = "hybrid-kem")]
+            ParseError::MissingPqCiphertext => {
+                write!(f, "`ct_pq` must be provided in hybrid-kem mode")
+            }
             ParseError::MissingRho => {
                 write!(f, "`rho` must be provided whenever `rseed` is provided")
             }
