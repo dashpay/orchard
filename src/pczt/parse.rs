@@ -406,3 +406,116 @@ impl fmt::Display for ParseError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for ParseError {}
+
+#[cfg(all(test, feature = "hybrid-kem"))]
+mod tests {
+    use super::*;
+    use crate::memo::ZcashMemo;
+
+    /// Helper: constructs minimal valid arguments for `Output::parse` (hybrid-kem mode).
+    /// The cmx, enc_ciphertext, and out_ciphertext are syntactically valid but semantically
+    /// meaningless — sufficient to reach the PQ field validation.
+    fn valid_output_args() -> (
+        Nullifier,
+        [u8; 32],
+        [u8; 32],
+        Vec<u8>,
+        Vec<u8>,
+        [u8; 1088],
+        [u8; 11],
+    ) {
+        use rand::rngs::OsRng;
+        let nf = Nullifier::dummy(&mut OsRng);
+        // Zero is a valid Pallas base field element
+        let cmx_bytes = [0u8; 32];
+        let ephemeral_key = [0u8; 32];
+        let enc_ciphertext = vec![0u8; 580]; // ZcashMemo NoteCiphertextBytes size
+        let out_ciphertext = vec![0u8; 112]; // hybrid out_ciphertext size
+        let ct_pq = [0u8; 1088];
+        let diversifier_hint = [0u8; 11];
+        (
+            nf,
+            cmx_bytes,
+            ephemeral_key,
+            enc_ciphertext,
+            out_ciphertext,
+            ct_pq,
+            diversifier_hint,
+        )
+    }
+
+    #[test]
+    fn output_parse_missing_pq_ciphertext() {
+        let (nf, cmx, epk, enc, out, _ct_pq, div_hint) = valid_output_args();
+        let result = Output::<ZcashMemo>::parse(
+            nf,
+            cmx,
+            epk,
+            enc,
+            out,
+            None, // ct_pq missing
+            Some(div_hint),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        assert!(
+            matches!(result, Err(ParseError::MissingPqCiphertext)),
+            "parse must fail with MissingPqCiphertext when ct_pq is None"
+        );
+    }
+
+    #[test]
+    fn output_parse_missing_diversifier_hint() {
+        let (nf, cmx, epk, enc, out, ct_pq, _div_hint) = valid_output_args();
+        let result = Output::<ZcashMemo>::parse(
+            nf,
+            cmx,
+            epk,
+            enc,
+            out,
+            Some(ct_pq),
+            None, // diversifier_hint missing
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        assert!(
+            matches!(result, Err(ParseError::MissingDiversifierHint)),
+            "parse must fail with MissingDiversifierHint when diversifier_hint is None"
+        );
+    }
+
+    #[test]
+    fn output_parse_succeeds_with_all_pq_fields() {
+        let (nf, cmx, epk, enc, out, ct_pq, div_hint) = valid_output_args();
+        let result = Output::<ZcashMemo>::parse(
+            nf,
+            cmx,
+            epk,
+            enc,
+            out,
+            Some(ct_pq),
+            Some(div_hint),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        assert!(
+            result.is_ok(),
+            "parse must succeed when all PQ fields are provided"
+        );
+    }
+}
