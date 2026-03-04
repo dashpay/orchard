@@ -1025,7 +1025,7 @@ impl core::fmt::Debug for PqDecapsulationKey {
 #[cfg(feature = "hybrid-kem")]
 impl PqDecapsulationKey {
     /// Returns the raw bytes.
-    pub fn to_bytes(&self) -> &[u8; PQ_DK_SIZE] {
+    pub fn as_bytes(&self) -> &[u8; PQ_DK_SIZE] {
         &self.0
     }
 
@@ -1238,9 +1238,8 @@ impl SharedSecret {
 /// Shared secret produced by hybrid key agreement (ECDH + ML-KEM).
 ///
 /// This type carries the ECDH shared secret, the ML-KEM shared secret, and the ML-KEM
-/// ciphertext (needed for the transmitted note). The KDF uses only the shared secrets
-/// and the ephemeral public key. ML-KEM's IND-CCA2 security ensures that modifying the
-/// PQ ciphertext changes the shared secret.
+/// ciphertext. The KDF binds all four inputs (both shared secrets, the PQ ciphertext,
+/// and the ephemeral public key), following the X-Wing security proof approach.
 #[cfg(feature = "hybrid-kem")]
 #[derive(Debug)]
 pub struct HybridSharedSecret {
@@ -1253,7 +1252,7 @@ pub struct HybridSharedSecret {
 impl HybridSharedSecret {
     /// Derives the symmetric key using the hybrid KDF.
     ///
-    /// Binds both shared secrets and the ephemeral public key into the derived key.
+    /// Binds both shared secrets, the PQ ciphertext, and the ephemeral public key.
     pub(crate) fn kdf_hybrid(&self, ephemeral_key: &EphemeralKeyBytes) -> Blake2bHash {
         let ss_ecdh = self.ecdh.to_affine().to_bytes();
         Params::new()

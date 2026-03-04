@@ -345,12 +345,7 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
                     }
                 }
                 OrchardDTKPq::None => {
-                    // Fallback: ECDH-only shared secret with zero PQ values
-                    HybridSharedSecret {
-                        ecdh: ecdh_secret.inner(),
-                        pq_ss: [0u8; 32],
-                        ct_pq: [0u8; PQ_CT_SIZE],
-                    }
+                    unreachable!("ka_agree_enc in hybrid-kem mode requires a PQ encapsulation key");
                 }
             }
         }
@@ -479,13 +474,14 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
             op[..32].copy_from_slice(&note.recipient().pk_d().to_bytes());
             op[32..64].copy_from_slice(&esk.ecdh.to_repr());
             // Re-derive ss_pq deterministically from ek_pq + pq_randomness
-            if let Some(ek_pq) = note.ek_pq() {
-                if let Ok((_, ss_pq)) =
-                    hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness)
-                {
-                    op[64..96].copy_from_slice(&ss_pq);
-                }
-            }
+            let ek_pq = note
+                .ek_pq()
+                .expect("hybrid-kem note must have ek_pq for outgoing plaintext");
+            let (_, ss_pq) = hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness)
+                .expect(
+                    "ML-KEM encapsulation must succeed for keys derived from a valid spending key",
+                );
+            op[64..96].copy_from_slice(&ss_pq);
             HybridOutPlaintextBytes(op)
         }
         #[cfg(not(feature = "hybrid-kem"))]
