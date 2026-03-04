@@ -115,8 +115,9 @@ When constructing a note for a recipient:
    hint = diversifier XOR mask
    ```
    This 11-byte hint is transmitted on-chain alongside the PQ ciphertext.
-5. Both shared secrets are combined via a hybrid KDF (BLAKE2b) to produce the
-   final symmetric key.
+5. Both shared secrets, the PQ ciphertext $\mathsf{ct\_{pq}}$, and the ephemeral
+   public key $\mathsf{epk}$ are combined via a hybrid KDF (BLAKE2b) to produce
+   the final symmetric key.
 
 ## Diversifier hint
 
@@ -140,9 +141,9 @@ For each on-chain transaction, the recipient performs:
 
 1. $\mathsf{ss\_{ecdh}} = \mathsf{ivk} \cdot \mathsf{epk}$ (ECDH, same as today)
 2. Decrypt the hint to recover the candidate diversifier:
-   $d = \text{hint} \oplus \text{BLAKE2b}(\mathsf{ss\_{ecdh}} \| \mathsf{epk})[..11]$
+   $d = \text{hint} \oplus \text{BLAKE2b-256}(\text{"DashPQ\_DivHint\_\_"},\; \mathsf{ss\_{ecdh}} \| \mathsf{epk})[..11]$
 3. Derive the per-diversifier seed:
-   $\mathsf{pq\_seed\_d} = \text{BLAKE2b}(\mathsf{pq\_seed} \| d)$
+   $\mathsf{pq\_seed\_d} = \text{BLAKE2b-512}(\text{"DashPQ\_DivSeed\_\_"},\; \mathsf{pq\_seed} \| d)$
 4. Generate the per-diversifier keypair:
    $(\mathsf{ek\_{pq\_d}}, \mathsf{dk\_{pq\_d}}) = \text{ML-KEM-768.KeyGen}(\mathsf{pq\_seed\_d})$
    (approximately 1ms)
@@ -193,6 +194,24 @@ The hybrid KEM adds overhead to transactions:
 The on-chain note format (`RawAddress`, note commitment, nullifier) is unchanged.
 The additional ciphertext $\mathsf{ct\_{pq}}$ and 11-byte diversifier hint are
 included alongside each action's encrypted output.
+
+## Serialization and PQ seed
+
+The `pq_seed` is **not** included in the standard 96-byte `FullViewingKey` or 64-byte
+`IncomingViewingKey` serialization formats (which follow the upstream Zcash spec). When
+an FVK or IVK is deserialized via `from_bytes`, the `pq_seed` field is `None`.
+
+**Consequences:**
+- An FVK without `pq_seed` will **panic** if used to derive addresses (since the
+  per-diversifier $\mathsf{ek\_{pq\_d}}$ cannot be computed).
+- An IVK without `pq_seed` will **silently fall back to ECDH-only** decryption, which
+  produces the wrong symmetric key for hybrid-mode notes --- all such notes become
+  invisible.
+
+**Solution:** After deserializing, re-attach the PQ seed using `set_pq_seed()` or
+`with_pq_seed()` before deriving addresses or performing trial decryption. The PQ seed
+can be derived from the spending key via `SpendingKey::pq_seed()` or stored/transmitted
+separately.
 
 ## Trade-offs
 

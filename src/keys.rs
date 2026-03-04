@@ -550,11 +550,32 @@ impl FullViewingKey {
 
     /// Returns the PQ seed, if available.
     ///
-    /// This is `Some` when the FVK was derived from a [`SpendingKey`], and `None`
-    /// when deserialized from bytes.
+    /// This is `Some` when the FVK was derived from a [`SpendingKey`] or when
+    /// explicitly set via [`set_pq_seed`](Self::set_pq_seed), and `None`
+    /// when deserialized from bytes without re-attaching the seed.
     #[cfg(feature = "hybrid-kem")]
     pub fn pq_seed(&self) -> Option<&PqSeed> {
         self.pq_seed.as_ref()
+    }
+
+    /// Sets the PQ seed on this full viewing key.
+    ///
+    /// This is needed after deserializing an FVK via [`from_bytes`](Self::from_bytes),
+    /// which does not include the PQ seed. Without a PQ seed, calling
+    /// [`address_at`](Self::address_at) or [`address`](Self::address) will panic
+    /// when the `hybrid-kem` feature is enabled.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn set_pq_seed(&mut self, pq_seed: PqSeed) {
+        self.pq_seed = Some(pq_seed);
+    }
+
+    /// Returns a copy of this FVK with the given PQ seed attached.
+    ///
+    /// This is a builder-style alternative to [`set_pq_seed`](Self::set_pq_seed).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn with_pq_seed(mut self, pq_seed: PqSeed) -> Self {
+        self.pq_seed = Some(pq_seed);
+        self
     }
 }
 
@@ -792,6 +813,31 @@ impl IncomingViewingKey {
     pub fn prepare(&self) -> PreparedIncomingViewingKey {
         PreparedIncomingViewingKey::new(self)
     }
+
+    /// Sets the PQ seed on this incoming viewing key.
+    ///
+    /// This is needed after deserializing an IVK via [`from_bytes`](Self::from_bytes),
+    /// which does not include the PQ seed. Without a PQ seed, hybrid note decryption
+    /// silently falls back to ECDH-only, which will fail to decrypt hybrid-mode notes.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn set_pq_seed(&mut self, pq_seed: PqSeed) {
+        self.pq_seed = Some(pq_seed);
+    }
+
+    /// Returns a copy of this IVK with the given PQ seed attached.
+    ///
+    /// This is a builder-style alternative to [`set_pq_seed`](Self::set_pq_seed).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn with_pq_seed(mut self, pq_seed: PqSeed) -> Self {
+        self.pq_seed = Some(pq_seed);
+        self
+    }
+
+    /// Returns the PQ seed, if available.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn pq_seed(&self) -> Option<&PqSeed> {
+        self.pq_seed.as_ref()
+    }
 }
 
 /// An Orchard incoming viewing key that has been precomputed for trial decryption.
@@ -892,22 +938,30 @@ impl core::fmt::Debug for PqSeed {
 
 #[cfg(feature = "hybrid-kem")]
 impl PqSeed {
+    /// Derives both the PQ encapsulation and decapsulation keys for a given diversifier.
+    ///
+    /// Use this when you need both keys to avoid running ML-KEM KeyGen twice.
+    pub fn keypair_for_diversifier(
+        &self,
+        diversifier: &Diversifier,
+    ) -> (PqEncapsulationKey, PqDecapsulationKey) {
+        let (ek, dk) =
+            hybrid_kem::generate_pq_keypair_for_diversifier(&self.0, diversifier.as_array());
+        (PqEncapsulationKey(ek), PqDecapsulationKey(dk))
+    }
+
     /// Derives the PQ encapsulation key for a given diversifier.
     pub fn ek_pq_for_diversifier(&self, diversifier: &Diversifier) -> PqEncapsulationKey {
-        let (ek, _) =
-            hybrid_kem::generate_pq_keypair_for_diversifier(&self.0, diversifier.as_array());
-        PqEncapsulationKey(ek)
+        self.keypair_for_diversifier(diversifier).0
     }
 
     /// Derives the PQ decapsulation key for a given diversifier.
     pub fn dk_pq_for_diversifier(&self, diversifier: &Diversifier) -> PqDecapsulationKey {
-        let (_, dk) =
-            hybrid_kem::generate_pq_keypair_for_diversifier(&self.0, diversifier.as_array());
-        PqDecapsulationKey(dk)
+        self.keypair_for_diversifier(diversifier).1
     }
 
     /// Returns the raw bytes of this seed.
-    pub fn to_bytes(&self) -> &[u8; 64] {
+    pub fn as_bytes(&self) -> &[u8; 64] {
         &self.0
     }
 }
@@ -920,7 +974,7 @@ pub struct PqEncapsulationKey(pub(crate) [u8; PQ_EK_SIZE]);
 #[cfg(feature = "hybrid-kem")]
 impl PqEncapsulationKey {
     /// Returns the raw bytes.
-    pub fn to_bytes(&self) -> &[u8; PQ_EK_SIZE] {
+    pub fn as_bytes(&self) -> &[u8; PQ_EK_SIZE] {
         &self.0
     }
 

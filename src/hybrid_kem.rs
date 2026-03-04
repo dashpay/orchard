@@ -456,16 +456,25 @@ mod tests {
 
         // Decryption side: recover diversifier from hint
         let recovered_div = decrypt_diversifier_hint(&ss_ecdh, &epk, &hint);
-        assert_eq!(diversifier, recovered_div);
+        assert_eq!(
+            diversifier, recovered_div,
+            "hint must round-trip the diversifier"
+        );
 
         // Derive per-diversifier dk from recovered diversifier
         let (_, dk_d_recovered) =
             generate_pq_keypair_for_diversifier(&master_pq_seed, &recovered_div);
-        assert_eq!(dk_d, dk_d_recovered);
+        assert_eq!(
+            dk_d, dk_d_recovered,
+            "recovered diversifier must produce the same dk"
+        );
 
         // Decapsulate
         let ss_pq_dec = decapsulate(&dk_d_recovered, &ct_pq);
-        assert_eq!(ss_pq_enc, ss_pq_dec);
+        assert_eq!(
+            ss_pq_enc, ss_pq_dec,
+            "decapsulation must recover the same shared secret"
+        );
 
         // Derive decryption key
         let key_dec = hybrid_kdf(&ss_ecdh, &ss_pq_dec, &ct_pq, &epk);
