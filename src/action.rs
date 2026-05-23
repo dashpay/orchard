@@ -353,10 +353,19 @@ mod tests {
     ) {
         let nf = Nullifier::from_bytes(&[1u8; 32]).unwrap();
         let cmx = ExtractedNoteCommitment::from_bytes(&[2u8; 32]).unwrap();
+        #[cfg(not(feature = "hybrid-kem"))]
         let encrypted_note = TransmittedNoteCiphertext::from_parts(
             pallas::Point::generator().to_bytes(),
             NoteBytesData([4u8; 580]),
             [5u8; 80],
+        );
+        #[cfg(feature = "hybrid-kem")]
+        let encrypted_note = TransmittedNoteCiphertext::from_parts(
+            pallas::Point::generator().to_bytes(),
+            NoteBytesData([4u8; 580]),
+            [5u8; 1088],
+            [6u8; 11],
+            [7u8; 112],
         );
         let cv_net = ValueCommitment::derive(ValueSum::from_raw(42), ValueCommitTrapdoor::zero());
         (nf, cmx, encrypted_note, cv_net)

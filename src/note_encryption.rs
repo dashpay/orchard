@@ -1029,7 +1029,7 @@ mod hybrid_tests {
 
         let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
         let cv_net = crate::value::ValueCommitment::derive(
-            NoteValue::from_raw(42) - NoteValue::zero(),
+            NoteValue::from_raw(42) - NoteValue::ZERO,
             crate::value::ValueCommitTrapdoor::random(&mut rng),
         );
 
@@ -1057,7 +1057,8 @@ mod hybrid_tests {
             ),
             cv_net,
             (),
-        );
+        )
+        .expect("test action should have non-identity rk");
 
         // Decrypt with IVK (has PQ seed via FVK chain)
         let ivk = fvk.to_ivk(Scope::External);
@@ -1094,7 +1095,7 @@ mod hybrid_tests {
 
         let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
         let cv_net = crate::value::ValueCommitment::derive(
-            NoteValue::from_raw(100) - NoteValue::zero(),
+            NoteValue::from_raw(100) - NoteValue::ZERO,
             crate::value::ValueCommitTrapdoor::random(&mut rng),
         );
 
@@ -1121,7 +1122,8 @@ mod hybrid_tests {
             ),
             cv_net,
             (),
-        );
+        )
+        .expect("test action should have non-identity rk");
 
         let ivk = fvk.to_ivk(Scope::External);
         let prepared_ivk = PreparedIncomingViewingKey::new(&ivk);
@@ -1161,7 +1163,7 @@ mod hybrid_tests {
 
         let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
         let cv_net = crate::value::ValueCommitment::derive(
-            NoteValue::from_raw(500) - NoteValue::zero(),
+            NoteValue::from_raw(500) - NoteValue::ZERO,
             crate::value::ValueCommitTrapdoor::random(&mut rng),
         );
 
@@ -1188,7 +1190,8 @@ mod hybrid_tests {
             ),
             cv_net.clone(),
             (),
-        );
+        )
+        .expect("test action should have non-identity rk");
 
         let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
         let result = try_output_recovery_with_ovk(&domain, &ovk, &action, &cv_net, &out_ciphertext);
@@ -1253,7 +1256,7 @@ mod hybrid_tests {
         let enc_ciphertext = ne.encrypt_note_plaintext();
         let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
         let cv_net = crate::value::ValueCommitment::derive(
-            NoteValue::from_raw(42) - NoteValue::zero(),
+            NoteValue::from_raw(42) - NoteValue::ZERO,
             crate::value::ValueCommitTrapdoor::random(&mut rng),
         );
         let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
@@ -1279,7 +1282,8 @@ mod hybrid_tests {
             ),
             cv_net,
             (),
-        );
+        )
+        .expect("test action should have non-identity rk");
 
         // Try decrypting with a completely different spending key's IVK
         let wrong_sk = SpendingKey::from_bytes([99; 32]).unwrap();
@@ -1316,7 +1320,7 @@ mod hybrid_tests {
         let enc_ciphertext = ne.encrypt_note_plaintext();
         let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
         let cv_net = crate::value::ValueCommitment::derive(
-            NoteValue::from_raw(123) - NoteValue::zero(),
+            NoteValue::from_raw(123) - NoteValue::ZERO,
             crate::value::ValueCommitTrapdoor::random(&mut rng),
         );
         let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
@@ -1342,7 +1346,8 @@ mod hybrid_tests {
             ),
             cv_net,
             (),
-        );
+        )
+        .expect("test action should have non-identity rk");
 
         // Decrypt with IVK — the hint must correctly recover diversifier 42
         let ivk = fvk.to_ivk(Scope::External);
@@ -1384,7 +1389,7 @@ mod hybrid_tests {
         let enc_ciphertext = ne.encrypt_note_plaintext();
         let cmx = crate::note::ExtractedNoteCommitment::from(note.commitment());
         let cv_net = crate::value::ValueCommitment::derive(
-            NoteValue::from_raw(42) - NoteValue::zero(),
+            NoteValue::from_raw(42) - NoteValue::ZERO,
             crate::value::ValueCommitTrapdoor::random(&mut rng),
         );
         let out_ciphertext = ne.encrypt_outgoing_plaintext(&cv_net, &cmx, &mut rng);
@@ -1410,7 +1415,8 @@ mod hybrid_tests {
             ),
             cv_net,
             (),
-        );
+        )
+        .expect("test action should have non-identity rk");
 
         let domain = OrchardDomain::<ZcashMemo>::for_action(&action);
 
