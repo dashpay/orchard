@@ -964,6 +964,22 @@ impl PqSeed {
     pub fn as_bytes(&self) -> &[u8; 64] {
         &self.0
     }
+
+    /// Constructs a PQ seed from raw bytes.
+    ///
+    /// Use this to re-attach a PQ seed to a deserialized [`FullViewingKey`] or
+    /// [`IncomingViewingKey`] (via `set_pq_seed` / `with_pq_seed`). The bytes
+    /// typically come from [`SpendingKey::pq_seed`].
+    pub fn from_bytes(bytes: [u8; 64]) -> Self {
+        PqSeed(bytes)
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl From<[u8; 64]> for PqSeed {
+    fn from(bytes: [u8; 64]) -> Self {
+        PqSeed(bytes)
+    }
 }
 
 /// An ML-KEM-768 encapsulation key (public key) for post-quantum key exchange.

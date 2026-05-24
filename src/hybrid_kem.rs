@@ -173,6 +173,7 @@ pub fn derive_pq_encaps_randomness(
 
 /// Errors that can occur during ML-KEM operations.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum PqError {
     /// ML-KEM encapsulation failed.
     EncapsulationFailed,

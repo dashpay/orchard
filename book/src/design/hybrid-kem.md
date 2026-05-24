@@ -16,12 +16,12 @@ a two-level scheme:
 
 1. The spending key $\mathsf{sk}$ is expanded via BLAKE2b-512 into a 64-byte master
    PQ seed:
-   ```
+   ```text
    pq_seed = BLAKE2b-512("DashPQ_KeyDerive", sk)
    ```
 
 2. For each diversifier $d$, a per-diversifier seed is derived:
-   ```
+   ```text
    pq_seed_d = BLAKE2b-512("DashPQ_DivSeed__", pq_seed || d)
    ```
 
@@ -110,7 +110,7 @@ When constructing a note for a recipient:
    ciphertext $\mathsf{ct\_{pq}}$ (1088 bytes) and a shared secret
    $\mathsf{ss\_{pq}}$.
 4. A **diversifier hint** is computed:
-   ```
+   ```text
    mask = BLAKE2b-256("DashPQ_DivHint__", ss_ecdh_bytes || epk_bytes)[..11]
    hint = diversifier XOR mask
    ```

@@ -123,9 +123,7 @@ fn bench_note_decryption(c: &mut Criterion) {
         group.bench_function("hit", |b| {
             b.iter(|| {
                 for _ in 0..10_000 {
-                    criterion::black_box(
-                        try_note_decryption(&domain, &valid_ivk, action).unwrap(),
-                    );
+                    criterion::black_box(try_note_decryption(&domain, &valid_ivk, action).unwrap());
                 }
             })
         });
