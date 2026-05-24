@@ -9,6 +9,10 @@ This provides defense against "harvest now, decrypt later" attacks, where an adv
 records encrypted traffic today and decrypts it later using a cryptographically relevant
 quantum computer.
 
+> New to KEMs, ML-KEM, or hybrid key exchange? See
+> [How the cryptography works](./how-hybrid-kem-works.md) for a from-first-principles
+> explanation; this page is the concrete construction and reference.
+
 ## Key derivation
 
 The post-quantum key material is derived deterministically from the spending key using

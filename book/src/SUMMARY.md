@@ -16,6 +16,7 @@
   - [Nullifiers](design/nullifiers.md)
   - [Signatures](design/signatures.md)
   - [Hybrid post-quantum key encapsulation](design/hybrid-kem.md)
+    - [How the cryptography works](design/how-hybrid-kem-works.md)
   - [Circuit](design/circuit.md)
     - [Gadgets](design/circuit/gadgets.md)
     - [CommitIvk](design/circuit/commit-ivk.md)
