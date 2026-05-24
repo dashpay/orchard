@@ -6,7 +6,12 @@ use crate::{
 };
 
 #[cfg(feature = "hybrid-kem")]
-use crate::keys::PqEncapsulationKey;
+use crate::{hybrid_kem::PQ_EK_SIZE, keys::PqEncapsulationKey};
+
+/// Size of the full serialized hybrid payment address: the 43-byte [`RawAddress`]
+/// followed by the 1184-byte PQ encapsulation key.
+#[cfg(feature = "hybrid-kem")]
+pub const HYBRID_ADDRESS_SIZE: usize = 43 + PQ_EK_SIZE;
 
 // ── RawAddress (hybrid-kem only) ──────────────────────────────────────────
 
@@ -124,9 +129,41 @@ impl Address {
 
     /// Serializes this address to its "raw" encoding as specified in [Zcash Protocol Spec § 5.6.4.2: Orchard Raw Payment Addresses][orchardpaymentaddrencoding]
     ///
+    /// Note: this drops the PQ encapsulation key. Use [`to_bytes`](Self::to_bytes) to
+    /// serialize the full hybrid address (including `ek_pq`).
+    ///
     /// [orchardpaymentaddrencoding]: https://zips.z.cash/protocol/protocol.pdf#orchardpaymentaddrencoding
     pub fn to_raw_address_bytes(&self) -> [u8; 43] {
         self.raw.to_raw_address_bytes()
+    }
+
+    /// Serializes the full hybrid payment address: the 43-byte [`RawAddress`] followed
+    /// by the 1184-byte PQ encapsulation key, for [`HYBRID_ADDRESS_SIZE`] (1227) bytes.
+    ///
+    /// This is the encoding a sender needs: it preserves the per-diversifier `ek_pq`
+    /// required to construct hybrid outputs (which [`to_raw_address_bytes`] drops).
+    pub fn to_bytes(&self) -> [u8; HYBRID_ADDRESS_SIZE] {
+        let mut result = [0u8; HYBRID_ADDRESS_SIZE];
+        result[..43].copy_from_slice(&self.raw.to_raw_address_bytes());
+        result[43..].copy_from_slice(self.ek_pq.as_bytes());
+        result
+    }
+
+    /// Parses a full hybrid payment address from its [`HYBRID_ADDRESS_SIZE`]-byte
+    /// encoding (43-byte [`RawAddress`] ‖ 1184-byte `ek_pq`), as produced by
+    /// [`to_bytes`](Self::to_bytes).
+    ///
+    /// Returns `None` if the `RawAddress` portion is not a valid address. The `ek_pq`
+    /// bytes are not validated here; a malformed key surfaces as an error at
+    /// encapsulation time.
+    pub fn from_bytes(bytes: &[u8; HYBRID_ADDRESS_SIZE]) -> Option<Self> {
+        let raw_bytes: &[u8; 43] = bytes[..43].try_into().expect("43-byte prefix");
+        let ek_pq_bytes: [u8; PQ_EK_SIZE] = bytes[43..].try_into().expect("ek_pq suffix");
+        let raw: RawAddress = Option::from(RawAddress::from_raw_address_bytes(raw_bytes))?;
+        Some(Address::from_parts(
+            raw,
+            PqEncapsulationKey::from_bytes(ek_pq_bytes),
+        ))
     }
 }
 
@@ -259,5 +296,21 @@ mod hybrid_address_tests {
 
         // into_raw consumes the Address into its RawAddress.
         assert_eq!(addr.into_raw(), raw);
+    }
+
+    #[test]
+    fn address_full_bytes_roundtrip() {
+        let fvk = FullViewingKey::from(&SpendingKey::from_bytes([7; 32]).unwrap());
+        let addr = fvk.address_at(0u32, Scope::External);
+
+        let bytes = addr.to_bytes();
+        // First 43 bytes are the raw address; the remaining 1184 are ek_pq.
+        assert_eq!(&bytes[..43], &addr.to_raw_address_bytes()[..]);
+        assert_eq!(&bytes[43..], addr.ek_pq().as_bytes());
+
+        // Full round-trip preserves both the raw address and the PQ key.
+        let addr2 = super::Address::from_bytes(&bytes).expect("valid address");
+        assert_eq!(addr2, addr);
+        assert_eq!(addr2.ek_pq().as_bytes(), addr.ek_pq().as_bytes());
     }
 }

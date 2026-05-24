@@ -55,6 +55,8 @@ pub mod zip32;
 mod test_vectors;
 
 pub use action::{Action, ActionFromPartsError};
+#[cfg(feature = "hybrid-kem")]
+pub use address::HYBRID_ADDRESS_SIZE;
 pub use address::{Address, RawAddress};
 pub use bundle::Bundle;
 pub use constants::MERKLE_DEPTH_ORCHARD as NOTE_COMMITMENT_TREE_DEPTH;

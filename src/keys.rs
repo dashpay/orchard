@@ -574,6 +574,42 @@ impl FullViewingKey {
         Some(fvk)
     }
 
+    /// Serializes the full viewing key **including** its PQ seed as a 160-byte blob:
+    /// the canonical 96-byte FVK encoding followed by the 64-byte `pq_seed`.
+    ///
+    /// Unlike [`to_bytes`](Self::to_bytes) — which follows the upstream 96-byte spec and
+    /// drops the PQ seed — this preserves the full hybrid *viewing capability* across a
+    /// round-trip, so a reloaded key can derive addresses and scan hybrid notes without
+    /// having to re-attach the seed via [`set_pq_seed`](Self::set_pq_seed).
+    ///
+    /// Returns `None` if this FVK has no PQ seed attached (e.g. it was itself parsed via
+    /// [`from_bytes`](Self::from_bytes)).
+    ///
+    /// # Security
+    ///
+    /// The output contains the secret `pq_seed`; treat it with at least the same care as
+    /// the FVK itself, since it grants the ability to decrypt incoming hybrid notes.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn to_bytes_with_pq(&self) -> Option<[u8; 160]> {
+        let pq_seed = self.pq_seed.as_ref()?;
+        let mut result = [0u8; 160];
+        result[..96].copy_from_slice(&self.to_bytes());
+        result[96..].copy_from_slice(pq_seed.as_bytes());
+        Some(result)
+    }
+
+    /// Parses a full viewing key from the 160-byte PQ-preserving encoding produced by
+    /// [`to_bytes_with_pq`](Self::to_bytes_with_pq) (96-byte FVK ‖ 64-byte `pq_seed`),
+    /// restoring the PQ seed so the key retains full hybrid viewing capability.
+    ///
+    /// Returns `None` if the embedded 96-byte FVK encoding is invalid.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn from_bytes_with_pq(bytes: &[u8; 160]) -> Option<Self> {
+        let fvk_bytes: &[u8; 96] = bytes[..96].try_into().expect("96-byte prefix");
+        let pq_bytes: [u8; 64] = bytes[96..].try_into().expect("64-byte suffix");
+        Self::from_bytes(fvk_bytes).map(|fvk| fvk.with_pq_seed(PqSeed::from_bytes(pq_bytes)))
+    }
+
     /// Derives an internal full viewing key from a full viewing key, as specified in
     /// [ZIP32][orchardinternalfullviewingkey]. Internal use only.
     ///
@@ -841,6 +877,39 @@ impl IncomingViewingKey {
                 pq_seed: None,
             }
         })
+    }
+
+    /// Serializes the incoming viewing key **including** its PQ seed as a 128-byte blob:
+    /// the canonical 64-byte IVK encoding followed by the 64-byte `pq_seed`.
+    ///
+    /// Unlike [`to_bytes`](Self::to_bytes) — which follows the upstream 64-byte spec and
+    /// drops the PQ seed (so a reloaded IVK silently fails to see hybrid notes) — this
+    /// preserves the full hybrid viewing capability across a round-trip.
+    ///
+    /// Returns `None` if this IVK has no PQ seed attached.
+    ///
+    /// # Security
+    ///
+    /// The output contains the secret `pq_seed`; treat it with at least the same care as
+    /// the IVK itself.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn to_bytes_with_pq(&self) -> Option<[u8; 128]> {
+        let pq_seed = self.pq_seed.as_ref()?;
+        let mut result = [0u8; 128];
+        result[..64].copy_from_slice(&self.to_bytes());
+        result[64..].copy_from_slice(pq_seed.as_bytes());
+        Some(result)
+    }
+
+    /// Parses an incoming viewing key from the 128-byte PQ-preserving encoding produced by
+    /// [`to_bytes_with_pq`](Self::to_bytes_with_pq) (64-byte IVK ‖ 64-byte `pq_seed`),
+    /// restoring the PQ seed so the key retains full hybrid viewing capability.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn from_bytes_with_pq(bytes: &[u8; 128]) -> Option<Self> {
+        let ivk_bytes: &[u8; 64] = bytes[..64].try_into().expect("64-byte prefix");
+        let pq_bytes: [u8; 64] = bytes[64..].try_into().expect("64-byte suffix");
+        let ivk: IncomingViewingKey = Option::from(Self::from_bytes(ivk_bytes))?;
+        Some(ivk.with_pq_seed(PqSeed::from_bytes(pq_bytes)))
     }
 
     /// Checks whether the given address was derived from this incoming viewing
@@ -1667,5 +1736,34 @@ mod hybrid_key_tests {
             Err(MissingPqSeed)
         );
         assert_eq!(fvk2.try_address(d, Scope::External), Err(MissingPqSeed));
+    }
+
+    #[test]
+    fn fvk_ivk_with_pq_roundtrip() {
+        let fvk = FullViewingKey::from(&sk());
+
+        // FVK: the PQ-preserving round-trip retains the seed and address capability.
+        let blob = fvk.to_bytes_with_pq().expect("fvk has pq_seed");
+        // The 160-byte blob is exactly the canonical 96-byte encoding plus the seed.
+        assert_eq!(&blob[..96], &fvk.to_bytes()[..]);
+        let fvk_rt = FullViewingKey::from_bytes_with_pq(&blob).expect("valid blob");
+        assert_eq!(fvk_rt.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
+        assert_eq!(
+            fvk_rt.address_at(0u32, Scope::External),
+            fvk.address_at(0u32, Scope::External)
+        );
+
+        // A seed-less FVK cannot produce the PQ-preserving blob.
+        assert!(FullViewingKey::from_bytes(&fvk.to_bytes())
+            .unwrap()
+            .to_bytes_with_pq()
+            .is_none());
+
+        // IVK: same PQ-preserving round-trip.
+        let ivk = fvk.to_ivk(Scope::External);
+        let iblob = ivk.to_bytes_with_pq().expect("ivk has pq_seed");
+        assert_eq!(&iblob[..64], &ivk.to_bytes()[..]);
+        let ivk_rt = IncomingViewingKey::from_bytes_with_pq(&iblob).expect("valid blob");
+        assert_eq!(ivk_rt.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
     }
 }

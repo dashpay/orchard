@@ -72,6 +72,14 @@ $\mathsf{ek\_{pq\_d}}$, for a total of 1227 bytes. This is encoded using Base58 
 consistency with existing Dash address formats, producing an address string of
 approximately 1678 characters.
 
+This crate exposes the raw 1227-byte form directly: `Address::to_bytes()` returns a
+`[u8; HYBRID_ADDRESS_SIZE]` (43-byte `RawAddress` ‖ 1184-byte $\mathsf{ek\_{pq\_d}}$),
+and `Address::from_bytes()` parses it back (returning `None` if the `RawAddress`
+portion is invalid). Note that `RawAddress::to_raw_address_bytes()` emits only the
+43-byte classical form and **drops** the PQ key, so senders must use `Address::to_bytes`
+to preserve $\mathsf{ek\_{pq\_d}}$. Base58 (or any text encoding) is applied on top of
+these bytes by the wallet layer.
+
 ### Encoding considerations
 
 Several encodings were evaluated:
@@ -132,8 +140,15 @@ same operation.
 **No MAC is included on the hint.** This is a deliberate design choice for quantum
 privacy: a quantum adversary who breaks ECDH can recover the diversifier from the
 hint, but cannot verify whether it corresponds to a valid diversifier without
-performing the full ML-KEM KeyGen + decapsulation + AEAD chain. The AEAD tag on
-the encrypted note implicitly authenticates everything, including the hint.
+performing the full ML-KEM KeyGen + decapsulation + AEAD chain.
+
+**Integrity comes from the bundle commitment, not a MAC.** The hint is hashed into
+the per-action non-compact data in the bundle (txid) commitment, alongside
+$\mathsf{ct\_{pq}}$, so it cannot be altered without invalidating the transaction.
+This prevents an on-path attacker from flipping the hint to make the recipient
+derive the wrong decapsulation key and silently fail to detect the note (a
+griefing/denial-of-service vector). The AEAD tag additionally causes a tampered
+hint to fail closed during trial decryption.
 
 ## Scanning flow
 
@@ -233,17 +248,30 @@ The `pq_seed` is **not** included in the standard 96-byte `FullViewingKey` or 64
 `IncomingViewingKey` serialization formats (which follow the upstream Zcash spec). When
 an FVK or IVK is deserialized via `from_bytes`, the `pq_seed` field is `None`.
 
-**Consequences:**
-- An FVK without `pq_seed` will **panic** if used to derive addresses (since the
-  per-diversifier $\mathsf{ek\_{pq\_d}}$ cannot be computed).
-- An IVK without `pq_seed` will **silently fall back to ECDH-only** decryption, which
+**Consequences of a missing `pq_seed`:**
+- Deriving an address via `FullViewingKey::address_at` / `address` will **panic**
+  (the per-diversifier $\mathsf{ek\_{pq\_d}}$ cannot be computed). Use the
+  non-panicking `try_address_at` / `try_address`, which return
+  `Result<Address, MissingPqSeed>`, when a key may lack its seed.
+- An IVK without `pq_seed` **silently falls back to ECDH-only** decryption, which
   produces the wrong symmetric key for hybrid-mode notes --- all such notes become
   invisible.
 
-**Solution:** After deserializing, re-attach the PQ seed using `set_pq_seed()` or
-`with_pq_seed()` before deriving addresses or performing trial decryption. The PQ seed
-can be derived from the spending key via `SpendingKey::pq_seed()` or stored/transmitted
-separately.
+**PQ-preserving serialization.** To round-trip the full hybrid *viewing capability*,
+use the opt-in extended forms, which append the 64-byte `pq_seed` to the canonical
+encoding:
+- `FullViewingKey::to_bytes_with_pq()` → `Option<[u8; 160]>` (96-byte FVK ‖ seed),
+  parsed by `from_bytes_with_pq`.
+- `IncomingViewingKey::to_bytes_with_pq()` → `Option<[u8; 128]>` (64-byte IVK ‖ seed),
+  parsed by `from_bytes_with_pq`.
+
+These return `None` when the key has no seed attached, and the output contains secret
+seed material, so it must be protected like the key itself. The canonical
+`to_bytes`/`from_bytes` remain unchanged and upstream-compatible.
+
+**Alternatively**, after deserializing a canonical (seed-less) key, re-attach the PQ
+seed with `set_pq_seed()` / `with_pq_seed()`. The seed can be re-derived from the
+spending key via `SpendingKey::pq_seed()` or stored/transmitted separately.
 
 ## Trade-offs
 
