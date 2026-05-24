@@ -416,12 +416,26 @@ impl FullViewingKey {
     }
 
     /// Returns the payment address for this key at the given index.
+    ///
+    /// # Panics
+    ///
+    /// With the `hybrid-kem` feature enabled, this panics if the `FullViewingKey`
+    /// has no PQ seed attached (e.g. it was deserialized via
+    /// [`from_bytes`](Self::from_bytes) without re-attaching one via
+    /// [`set_pq_seed`](Self::set_pq_seed) / [`with_pq_seed`](Self::with_pq_seed)).
+    /// Use [`try_address_at`](Self::try_address_at) for a non-panicking alternative.
     pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
         let raw = self.to_ivk(scope).address_at(j);
         self.wrap_raw_address(raw)
     }
 
     /// Returns the payment address for this key corresponding to the given diversifier.
+    ///
+    /// # Panics
+    ///
+    /// With the `hybrid-kem` feature enabled, this panics if the `FullViewingKey`
+    /// has no PQ seed attached. Use [`try_address`](Self::try_address) for a
+    /// non-panicking alternative.
     pub fn address(&self, d: Diversifier, scope: Scope) -> Address {
         // Shortcut: we don't need to derive DiversifierKey.
         let raw = match scope {
@@ -432,25 +446,67 @@ impl FullViewingKey {
         self.wrap_raw_address(raw)
     }
 
+    /// Returns the payment address for this key at the given index, or
+    /// [`MissingPqSeed`] if the PQ seed needed to derive the per-diversifier
+    /// encapsulation key is not attached.
+    ///
+    /// This is the non-panicking counterpart to [`address_at`](Self::address_at), and
+    /// is the recommended API for keys that may have been deserialized via
+    /// [`from_bytes`](Self::from_bytes) (which does not carry the PQ seed).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn try_address_at(
+        &self,
+        j: impl Into<DiversifierIndex>,
+        scope: Scope,
+    ) -> Result<Address, MissingPqSeed> {
+        let raw = self.to_ivk(scope).address_at(j);
+        self.try_wrap_raw_address(raw)
+    }
+
+    /// Returns the payment address for the given diversifier, or [`MissingPqSeed`]
+    /// if the PQ seed needed to derive the per-diversifier encapsulation key is not
+    /// attached.
+    ///
+    /// Non-panicking counterpart to [`address`](Self::address).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn try_address(&self, d: Diversifier, scope: Scope) -> Result<Address, MissingPqSeed> {
+        let raw = match scope {
+            Scope::External => KeyAgreementPrivateKey::from_fvk(self),
+            Scope::Internal => KeyAgreementPrivateKey::from_fvk(&self.derive_internal()),
+        }
+        .address(d);
+        self.try_wrap_raw_address(raw)
+    }
+
     /// Wraps a [`RawAddress`] into a full [`Address`].
     ///
     /// In hybrid-kem mode, this derives the per-diversifier PQ encapsulation key
     /// from the FVK's `pq_seed` and the address's diversifier.
-    /// Panics if the FVK was deserialized from bytes and lacks a PQ seed.
+    ///
+    /// # Panics
+    ///
+    /// In hybrid-kem mode, panics if the FVK lacks a PQ seed. Internal callers that
+    /// need to handle this gracefully should use
+    /// [`try_wrap_raw_address`](Self::try_wrap_raw_address).
     fn wrap_raw_address(&self, raw: RawAddress) -> Address {
         #[cfg(feature = "hybrid-kem")]
         {
-            let pq_seed = self
-                .pq_seed
-                .as_ref()
-                .expect("FullViewingKey must have pq_seed to derive an Address");
-            let ek_pq = pq_seed.ek_pq_for_diversifier(&raw.diversifier());
-            Address::from_parts(raw, ek_pq)
+            self.try_wrap_raw_address(raw)
+                .expect("FullViewingKey must have pq_seed to derive an Address")
         }
         #[cfg(not(feature = "hybrid-kem"))]
         {
             raw
         }
+    }
+
+    /// Fallibly wraps a [`RawAddress`] into a full [`Address`], deriving the
+    /// per-diversifier PQ encapsulation key from the FVK's `pq_seed`.
+    #[cfg(feature = "hybrid-kem")]
+    fn try_wrap_raw_address(&self, raw: RawAddress) -> Result<Address, MissingPqSeed> {
+        let pq_seed = self.pq_seed.as_ref().ok_or(MissingPqSeed)?;
+        let ek_pq = pq_seed.ek_pq_for_diversifier(&raw.diversifier());
+        Ok(Address::from_parts(raw, ek_pq))
     }
 
     /// Returns the scope of the given address, or `None` if the address is not derived
@@ -981,6 +1037,29 @@ impl From<[u8; 64]> for PqSeed {
         PqSeed(bytes)
     }
 }
+
+/// Error returned when deriving an [`Address`] requires a PQ seed that is not
+/// attached to the [`FullViewingKey`].
+///
+/// This occurs when an FVK was deserialized via
+/// [`FullViewingKey::from_bytes`] (which does not carry the PQ seed) and then used
+/// to derive an address without first re-attaching the seed via
+/// [`set_pq_seed`](FullViewingKey::set_pq_seed) /
+/// [`with_pq_seed`](FullViewingKey::with_pq_seed).
+#[cfg(feature = "hybrid-kem")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MissingPqSeed;
+
+#[cfg(feature = "hybrid-kem")]
+impl core::fmt::Display for MissingPqSeed {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("FullViewingKey has no PQ seed attached; re-attach it with set_pq_seed/with_pq_seed before deriving an address")
+    }
+}
+
+#[cfg(all(feature = "hybrid-kem", feature = "std"))]
+impl std::error::Error for MissingPqSeed {}
 
 /// An ML-KEM-768 encapsulation key (public key) for post-quantum key exchange.
 #[cfg(feature = "hybrid-kem")]
@@ -1564,5 +1643,29 @@ mod hybrid_key_tests {
                 .map(|k: IncomingViewingKey| k.with_pq_seed(PqSeed::from_bytes(sk().pq_seed())))
                 .unwrap();
         assert_eq!(ivk3.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
+    }
+
+    #[test]
+    fn try_address_is_non_panicking() {
+        let fvk = FullViewingKey::from(&sk());
+        let d = Diversifier::from_bytes([9; 11]);
+
+        // With a PQ seed, the fallible methods succeed and match the panicking ones.
+        assert_eq!(
+            fvk.try_address_at(0u32, Scope::External).unwrap(),
+            fvk.address_at(0u32, Scope::External)
+        );
+        assert_eq!(
+            fvk.try_address(d, Scope::External).unwrap(),
+            fvk.address(d, Scope::External)
+        );
+
+        // A deserialized FVK without a PQ seed returns an error instead of panicking.
+        let fvk2 = FullViewingKey::from_bytes(&fvk.to_bytes()).unwrap();
+        assert_eq!(
+            fvk2.try_address_at(0u32, Scope::External),
+            Err(MissingPqSeed)
+        );
+        assert_eq!(fvk2.try_address(d, Scope::External), Err(MissingPqSeed));
     }
 }
