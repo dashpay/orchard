@@ -232,3 +232,32 @@ pub mod testing {
         }
     }
 }
+
+#[cfg(all(test, feature = "hybrid-kem"))]
+mod hybrid_address_tests {
+    use super::RawAddress;
+    use crate::keys::{FullViewingKey, Scope, SpendingKey};
+
+    #[test]
+    fn address_accessors_and_raw_roundtrip() {
+        let fvk = FullViewingKey::from(&SpendingKey::from_bytes([7; 32]).unwrap());
+        let addr = fvk.address_at(0u32, Scope::External);
+
+        // The full Address carries a PQ encapsulation key.
+        let _ = addr.ek_pq();
+
+        // raw() exposes the 43-byte on-chain form; accessors agree with it.
+        let raw = *addr.raw();
+        assert_eq!(addr.diversifier(), raw.diversifier());
+        assert_eq!(addr.to_raw_address_bytes(), raw.to_raw_address_bytes());
+
+        // RawAddress serialization round-trips.
+        let bytes = raw.to_raw_address_bytes();
+        let raw2: RawAddress =
+            Option::from(RawAddress::from_raw_address_bytes(&bytes)).expect("valid raw address");
+        assert_eq!(raw, raw2);
+
+        // into_raw consumes the Address into its RawAddress.
+        assert_eq!(addr.into_raw(), raw);
+    }
+}

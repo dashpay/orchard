@@ -1459,3 +1459,110 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, feature = "hybrid-kem"))]
+mod hybrid_key_tests {
+    use super::*;
+
+    fn sk() -> SpendingKey {
+        SpendingKey::from_bytes([7; 32]).unwrap()
+    }
+
+    #[test]
+    fn pq_seed_construct_and_roundtrip() {
+        let seed_bytes = sk().pq_seed();
+        let seed = PqSeed::from_bytes(seed_bytes);
+        assert_eq!(seed.as_bytes(), &seed_bytes);
+
+        let from_into: PqSeed = seed_bytes.into();
+        assert_eq!(from_into.as_bytes(), &seed_bytes);
+
+        // Debug must not leak the raw seed bytes.
+        assert_eq!(format!("{:?}", seed), "PqSeed(64 bytes)");
+    }
+
+    #[test]
+    fn pq_seed_per_diversifier_keys() {
+        let seed = PqSeed::from_bytes(sk().pq_seed());
+        let d = Diversifier::from_bytes([3; 11]);
+
+        let (ek, dk) = seed.keypair_for_diversifier(&d);
+        assert_eq!(ek, seed.ek_pq_for_diversifier(&d));
+        assert_eq!(dk.as_bytes(), seed.dk_pq_for_diversifier(&d).as_bytes());
+
+        // Different diversifiers yield different keypairs (unlinkability).
+        let d2 = Diversifier::from_bytes([4; 11]);
+        assert_ne!(ek, seed.ek_pq_for_diversifier(&d2));
+    }
+
+    #[test]
+    fn pq_encapsulation_key_roundtrip_and_ord() {
+        let seed = PqSeed::from_bytes(sk().pq_seed());
+        let ek = seed.ek_pq_for_diversifier(&Diversifier::from_bytes([1; 11]));
+
+        let ek_rt = PqEncapsulationKey::from_bytes(*ek.as_bytes());
+        assert_eq!(ek, ek_rt);
+        assert_eq!(ek.cmp(&ek_rt), core::cmp::Ordering::Equal);
+        assert_eq!(ek.partial_cmp(&ek_rt), Some(core::cmp::Ordering::Equal));
+
+        let ek2 = seed.ek_pq_for_diversifier(&Diversifier::from_bytes([2; 11]));
+        assert_ne!(ek, ek2);
+        // Ord is consistent with a byte-wise comparison.
+        assert_eq!(ek.cmp(&ek2), ek.as_bytes()[..].cmp(&ek2.as_bytes()[..]));
+        let _ = format!("{:?}", ek);
+    }
+
+    #[test]
+    fn pq_decapsulation_key_roundtrip() {
+        let seed = PqSeed::from_bytes(sk().pq_seed());
+        let dk = seed.dk_pq_for_diversifier(&Diversifier::from_bytes([5; 11]));
+
+        let dk_rt = PqDecapsulationKey::from_bytes(*dk.as_bytes());
+        assert_eq!(dk.as_bytes(), dk_rt.as_bytes());
+        // Debug must not leak the raw key bytes.
+        assert!(format!("{:?}", dk).contains("bytes"));
+    }
+
+    #[test]
+    fn fvk_pq_seed_accessors() {
+        let fvk = FullViewingKey::from(&sk());
+        assert!(fvk.pq_seed().is_some());
+
+        // A deserialized FVK loses its PQ seed.
+        let mut fvk2 = FullViewingKey::from_bytes(&fvk.to_bytes()).unwrap();
+        assert!(fvk2.pq_seed().is_none());
+
+        // set_pq_seed re-attaches it, restoring address derivation.
+        fvk2.set_pq_seed(PqSeed::from_bytes(sk().pq_seed()));
+        assert!(fvk2.pq_seed().is_some());
+        assert_eq!(
+            fvk2.address_at(0u32, Scope::External),
+            fvk.address_at(0u32, Scope::External)
+        );
+
+        // with_pq_seed is the builder-style equivalent.
+        let fvk3 = FullViewingKey::from_bytes(&fvk.to_bytes())
+            .unwrap()
+            .with_pq_seed(PqSeed::from_bytes(sk().pq_seed()));
+        assert_eq!(fvk3.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
+    }
+
+    #[test]
+    fn ivk_pq_seed_accessors() {
+        let ivk = FullViewingKey::from(&sk()).to_ivk(Scope::External);
+        assert!(ivk.pq_seed().is_some());
+
+        let mut ivk2: IncomingViewingKey =
+            Option::from(IncomingViewingKey::from_bytes(&ivk.to_bytes())).unwrap();
+        assert!(ivk2.pq_seed().is_none());
+
+        ivk2.set_pq_seed(PqSeed::from_bytes(sk().pq_seed()));
+        assert!(ivk2.pq_seed().is_some());
+
+        let ivk3: IncomingViewingKey =
+            Option::from(IncomingViewingKey::from_bytes(&ivk.to_bytes()))
+                .map(|k: IncomingViewingKey| k.with_pq_seed(PqSeed::from_bytes(sk().pq_seed())))
+                .unwrap();
+        assert_eq!(ivk3.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
+    }
+}
