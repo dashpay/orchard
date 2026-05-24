@@ -1,9 +1,9 @@
 [book]
-authors = ["Jack Grigg"]
+authors = ["Dash Core Group", "Jack Grigg"]
 language = "en"
 multilingual = false
 src = "src"
-title = "The Orchard Book"
+title = "The Dash Orchard Book"
 
 [preprocessor.katex]
 macros = "macros.txt"
