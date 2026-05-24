@@ -19,7 +19,9 @@ fn bench_note_decryption(c: &mut Criterion) {
 
     let fvk = FullViewingKey::from(&SpendingKey::from_bytes([7; 32]).unwrap());
     let valid_ivk = fvk.to_ivk(Scope::External);
-    let recipient = valid_ivk.address_at(0u32);
+    // Use the FVK to get a full `Address` (carries the PQ encapsulation key under
+    // the `hybrid-kem` feature; identical to `RawAddress` without it).
+    let recipient = fvk.address_at(0u32, Scope::External);
     let valid_ivk = PreparedIncomingViewingKey::new(&valid_ivk);
 
     // Compact actions don't have the full AEAD ciphertext, so ZIP 307 trial-decryption
@@ -93,6 +95,37 @@ fn bench_note_decryption(c: &mut Criterion) {
             b.iter(|| {
                 for ivk in &invalid_ivks {
                     try_compact_note_decryption(&domain, ivk, &compact);
+                }
+            })
+        });
+    }
+
+    {
+        // Explicit "scan 10,000 notes" benchmark. In hybrid-kem mode each full
+        // `try_note_decryption` performs an ML-KEM-768 KeyGen + decapsulation per note;
+        // without the feature it is the classic ECDH-only path.
+        let mut group = c.benchmark_group("decrypt-10k");
+        group.sample_size(10);
+        group.throughput(Throughput::Elements(10_000));
+
+        // Realistic scanning cost: 10,000 notes that are NOT ours. Each uses a distinct
+        // ivk (equivalent to 10,000 distinct foreign actions) and rejects at AEAD, after
+        // the full hybrid chain in hybrid-kem mode.
+        group.bench_function("miss", |b| {
+            b.iter(|| {
+                for ivk in invalid_ivks.iter().take(10_000) {
+                    criterion::black_box(try_note_decryption(&domain, ivk, action));
+                }
+            })
+        });
+
+        // All-hits cost: 10,000 successful trial decryptions with our own ivk.
+        group.bench_function("hit", |b| {
+            b.iter(|| {
+                for _ in 0..10_000 {
+                    criterion::black_box(
+                        try_note_decryption(&domain, &valid_ivk, action).unwrap(),
+                    );
                 }
             })
         });

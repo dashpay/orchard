@@ -146,7 +146,7 @@ For each on-chain transaction, the recipient performs:
    $\mathsf{pq\_seed\_d} = \text{BLAKE2b-512}(\text{"DashPQ\_DivSeed\_\_"},\; \mathsf{pq\_seed} \| d)$
 4. Generate the per-diversifier keypair:
    $(\mathsf{ek\_{pq\_d}}, \mathsf{dk\_{pq\_d}}) = \text{ML-KEM-768.KeyGen}(\mathsf{pq\_seed\_d})$
-   (approximately 1ms)
+   (tens of microseconds; see [Performance](#performance))
 5. Decapsulate:
    $\mathsf{ss\_{pq}} = \text{ML-KEM.Decapsulate}(\mathsf{dk\_{pq\_d}}, \mathsf{ct\_{pq}})$
 6. Derive the symmetric key via hybrid KDF:
@@ -155,10 +155,42 @@ For each on-chain transaction, the recipient performs:
 
 ### Performance
 
-The ML-KEM-768 KeyGen in step 4 is the bottleneck, taking approximately 1ms per
-transaction scanned. This is 3--6x slower than classical scanning. The trade-off
-is full quantum privacy: without a MAC on the hint, a quantum adversary cannot
-identify which transactions belong to a wallet without attempting the full chain.
+The post-quantum steps 4--5 (per-diversifier ML-KEM-768 KeyGen + decapsulation) are
+the only meaningful cost the hybrid scheme adds to scanning. They cannot be skipped
+or precomputed: the decapsulation key is per-diversifier, and the diversifier is only
+known *after* decrypting the hint (which itself requires the ECDH result for that
+output). So every scanned output pays a fresh KeyGen.
+
+The cost was measured with the `decrypt-10k` benchmark (10,000 full trial
+decryptions, release build, single core). Reproduce with:
+
+```text
+cargo bench --bench note_decryption -- decrypt-10k                   # classic
+cargo bench --bench note_decryption --features hybrid-kem -- decrypt-10k
+```
+
+| Scenario | Classic (ECDH-only) | Hybrid | Overhead |
+|----------|---------------------|--------|----------|
+| Foreign note ("miss" --- the dominant scanning case) | ~61 µs/note | ~124 µs/note | +~63 µs/note (~2×) |
+| Owned note ("hit") | ~712 µs/note | ~772 µs/note | +~8.5% |
+
+The realistic scanning cost --- nearly every scanned output is foreign --- is about
+**2× slower** than classical: the post-quantum chain adds roughly **63 µs per output**
+on a modern core. Extrapolated to a 1,000,000-note scan that is approximately
+**1 minute (classical) versus 2 minutes (hybrid)** single-threaded, or a few seconds
+either way across multiple cores, since trial decryption is embarrassingly parallel.
+
+Note that the "hit" path is far more expensive in both modes (~700 µs) because a
+*successful* decryption recomputes the Sinsemilla note commitment to validate the
+recovered note; the ML-KEM work is a small fraction of that, and owned notes are rare
+during scanning. These figures are machine-dependent and use the portable RustCrypto
+`ml-kem` implementation; an AVX2/NEON-optimized ML-KEM would reduce the overhead
+further. (An earlier estimate of ~1 ms per KeyGen was conservative by roughly an order
+of magnitude.)
+
+The trade-off remains full quantum privacy: without a MAC on the hint, a quantum
+adversary cannot identify which transactions belong to a wallet without attempting
+the full chain.
 
 ## Security properties
 
@@ -217,7 +249,7 @@ separately.
 
 | Decision | Benefit | Cost |
 |----------|---------|------|
-| No MAC on hint | Full quantum privacy | ~3--6x slower scanning (ML-KEM KeyGen per tx) |
-| Per-diversifier keys | Address unlinkability restored | ML-KEM KeyGen (~1ms) per address derivation |
+| No MAC on hint | Full quantum privacy | ~2× slower scanning (≈63 µs ML-KEM per output) |
+| Per-diversifier keys | Address unlinkability restored | ML-KEM KeyGen (tens of µs) per address derivation |
 | `pq_seed` in FVK/IVK | 64 bytes vs 3584 bytes (ek+dk) | On-demand key derivation instead of pre-computed |
 | 11-byte hint on-chain | Negligible vs 1088-byte ct_pq | --- |
