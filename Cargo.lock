@@ -431,13 +431,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "core2"
-version = "0.3.3"
+name = "corez"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "239fa3ae9b63c2dc74bd3fa852d4792b8b305ae64eeede946265b6af62f1fff3"
-dependencies = [
- "memchr",
-]
+checksum = "4df6f98652d30167eaeea34d77b730e07c8caba6df17bd4551842b9b8da01deb"
 
 [[package]]
 name = "cpp_demangle"
@@ -1497,12 +1494,12 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "orchard"
-version = "0.12.0"
+version = "0.13.1"
 dependencies = [
  "aes",
  "bitvec",
  "blake2b_simd",
- "core2",
+ "corez",
  "criterion",
  "ff",
  "fpe",
@@ -2643,7 +2640,7 @@ dependencies = [
 [[package]]
 name = "zcash_note_encryption"
 version = "0.4.1"
-source = "git+https://github.com/dashpay/zcash_note_encryption?rev=db0eef3c62367d72e6d3728cefa507b8c374b248#db0eef3c62367d72e6d3728cefa507b8c374b248"
+source = "git+https://github.com/dashpay/zcash_note_encryption?rev=135efa84f4f43eb2d92bd40b507c522e17f5518b#135efa84f4f43eb2d92bd40b507c522e17f5518b"
 dependencies = [
  "chacha20",
  "chacha20poly1305",
