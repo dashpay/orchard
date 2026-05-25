@@ -141,7 +141,8 @@ impl Address {
     /// by the 1184-byte PQ encapsulation key, for [`HYBRID_ADDRESS_SIZE`] (1227) bytes.
     ///
     /// This is the encoding a sender needs: it preserves the per-diversifier `ek_pq`
-    /// required to construct hybrid outputs (which [`to_raw_address_bytes`] drops).
+    /// required to construct hybrid outputs (which
+    /// [`to_raw_address_bytes`](Self::to_raw_address_bytes) drops).
     pub fn to_bytes(&self) -> [u8; HYBRID_ADDRESS_SIZE] {
         let mut result = [0u8; HYBRID_ADDRESS_SIZE];
         result[..43].copy_from_slice(&self.raw.to_raw_address_bytes());
