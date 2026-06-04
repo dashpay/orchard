@@ -107,7 +107,9 @@ pub fn hash_bundle_auth_empty() -> Blake2bHash {
 
 #[cfg(all(test, feature = "hybrid-kem"))]
 mod tests {
+    use group::{Group, GroupEncoding};
     use nonempty::NonEmpty;
+    use pasta_curves::pallas;
     use zcash_note_encryption::note_bytes::NoteBytesData;
 
     use super::hash_bundle_txid_data;
@@ -130,8 +132,11 @@ mod tests {
         cv_net: ValueCommitment,
         diversifier_hint: [u8; 11],
     ) -> Bundle<EffectsOnly, i64> {
+        // `Action::from_parts` requires `epk_bytes` to encode a non-identity
+        // Pallas point, so use a fixed valid one.
+        let epk_bytes = pallas::Point::generator().to_bytes();
         let encrypted_note = TransmittedNoteCiphertext::<ZcashMemo>::from_parts(
-            [0u8; 32],
+            epk_bytes,
             NoteBytesData([0u8; 580]),
             [0u8; 1088],
             diversifier_hint,

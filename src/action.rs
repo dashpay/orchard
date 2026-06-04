@@ -194,6 +194,9 @@ pub(crate) mod testing {
 
     use proptest::prelude::*;
 
+    #[cfg(feature = "hybrid-kem")]
+    use zcash_note_encryption::note_bytes::NoteBytesData;
+
     use crate::{
         memo::ZcashMemo,
         note::{
@@ -214,6 +217,11 @@ pub(crate) mod testing {
     /// together with the note and outgoing ciphertexts. No outgoing viewing key
     /// is used, so `out_ciphertext` is encrypted under a random key, as for a
     /// real output sent without an `ovk`.
+    ///
+    /// Classic-only: the hybrid path constructs a stub `TransmittedNoteCiphertext`
+    /// directly (the proptests bypass `Action::from_parts`'s epk validity by
+    /// constructing the `Action` via its struct literal).
+    #[cfg(not(feature = "hybrid-kem"))]
     fn encrypted_note_for(
         note: Note,
         cv_net: &ValueCommitment,
