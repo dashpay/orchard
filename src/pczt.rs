@@ -11,6 +11,7 @@ use zcash_note_encryption::OutgoingCipherKey;
 use zip32::ChildIndex;
 
 use crate::{
+    address::RawAddress,
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
     memo::{MemoSize, ZcashMemo},
@@ -18,7 +19,7 @@ use crate::{
     primitives::redpallas::{self, Binding, SpendAuth},
     tree::MerklePath,
     value::{NoteValue, ValueCommitTrapdoor, ValueCommitment, ValueSum},
-    Address, Anchor, Proof,
+    Anchor, Proof,
 };
 
 mod parse;
@@ -150,7 +151,7 @@ pub struct Spend {
     ///
     /// - This is set by the Constructor (or Updater?).
     /// - This is required by the Prover.
-    pub(crate) recipient: Option<Address>,
+    pub(crate) recipient: Option<RawAddress>,
 
     /// The value of the input being spent.
     ///
@@ -234,7 +235,7 @@ pub struct Output<M: MemoSize = ZcashMemo> {
     /// - The Signer can use `recipient` and `rseed` (if present) to verify that
     ///   `enc_ciphertext` is correctly encrypted (and contains a note plaintext matching
     ///   the public commitments), and to confirm the value of the memo.
-    pub(crate) recipient: Option<Address>,
+    pub(crate) recipient: Option<RawAddress>,
 
     /// The value of the output.
     ///
@@ -432,9 +433,13 @@ mod tests {
         let note = {
             let rho = Rho::from_bytes(&pallas::Base::random(&mut rng).to_repr()).unwrap();
             loop {
-                if let Some(note) =
-                    Note::from_parts(recipient, value, rho, RandomSeed::random(&mut rng, &rho))
-                        .into_option()
+                if let Some(note) = Note::from_parts(
+                    *recipient.raw(),
+                    value,
+                    rho,
+                    RandomSeed::random(&mut rng, &rho),
+                )
+                .into_option()
                 {
                     break note;
                 }

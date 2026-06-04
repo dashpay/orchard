@@ -17,8 +17,11 @@ use rand::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use zcash_note_encryption::EphemeralKeyBytes;
 
+#[cfg(feature = "hybrid-kem")]
+use crate::hybrid_kem::{self, PQ_CT_SIZE, PQ_DK_SIZE, PQ_EK_SIZE};
+
 use crate::{
-    address::Address,
+    address::{Address, RawAddress},
     primitives::redpallas::{self, SpendAuth},
     spec::{
         commit_ivk, diversify_hash, extract_p, ka_orchard, ka_orchard_prepared, prf_nf, to_base,
@@ -89,6 +92,14 @@ impl SpendingKey {
     /// Returns the raw bytes of the spending key.
     pub fn to_bytes(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    /// Derives a 64-byte PQ seed from the spending key bytes.
+    ///
+    /// The seed is split into `d = seed[..32]` and `z = seed[32..]` for ML-KEM-768 KeyGen.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn pq_seed(&self) -> [u8; 64] {
+        hybrid_kem::derive_pq_seed(&self.0)
     }
 
     /// Derives the Orchard spending key for the given seed, coin type, and account.
@@ -312,11 +323,36 @@ impl CommitIvkRandomness {
 /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
 ///
 /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone)]
 pub struct FullViewingKey {
     ak: SpendValidatingKey,
     nk: NullifierDerivingKey,
     rivk: CommitIvkRandomness,
+    #[cfg(feature = "hybrid-kem")]
+    pq_seed: Option<PqSeed>,
+}
+
+// FVK identity is determined by (ak, nk, rivk) only.
+// The PQ keys are supplementary and may or may not be present depending on
+// whether the FVK was derived from a spending key or deserialized from bytes.
+impl PartialEq for FullViewingKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.ak == other.ak && self.nk == other.nk && self.rivk == other.rivk
+    }
+}
+
+impl Eq for FullViewingKey {}
+
+impl PartialOrd for FullViewingKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for FullViewingKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        (&self.ak, &self.nk, &self.rivk).cmp(&(&other.ak, &other.nk, &other.rivk))
+    }
 }
 
 impl From<&SpendingKey> for FullViewingKey {
@@ -325,6 +361,8 @@ impl From<&SpendingKey> for FullViewingKey {
             ak: (&SpendAuthorizingKey::from(sk)).into(),
             nk: sk.into(),
             rivk: sk.into(),
+            #[cfg(feature = "hybrid-kem")]
+            pq_seed: Some(PqSeed(sk.pq_seed())),
         }
     }
 }
@@ -378,23 +416,102 @@ impl FullViewingKey {
     }
 
     /// Returns the payment address for this key at the given index.
+    ///
+    /// # Panics
+    ///
+    /// With the `hybrid-kem` feature enabled, this panics if the `FullViewingKey`
+    /// has no PQ seed attached (e.g. it was deserialized via
+    /// [`from_bytes`](Self::from_bytes) without re-attaching one via
+    /// [`set_pq_seed`](Self::set_pq_seed) / [`with_pq_seed`](Self::with_pq_seed)).
+    /// Use [`try_address_at`](Self::try_address_at) for a non-panicking alternative.
     pub fn address_at(&self, j: impl Into<DiversifierIndex>, scope: Scope) -> Address {
-        self.to_ivk(scope).address_at(j)
+        let raw = self.to_ivk(scope).address_at(j);
+        self.wrap_raw_address(raw)
     }
 
     /// Returns the payment address for this key corresponding to the given diversifier.
+    ///
+    /// # Panics
+    ///
+    /// With the `hybrid-kem` feature enabled, this panics if the `FullViewingKey`
+    /// has no PQ seed attached. Use [`try_address`](Self::try_address) for a
+    /// non-panicking alternative.
     pub fn address(&self, d: Diversifier, scope: Scope) -> Address {
         // Shortcut: we don't need to derive DiversifierKey.
-        match scope {
+        let raw = match scope {
             Scope::External => KeyAgreementPrivateKey::from_fvk(self),
             Scope::Internal => KeyAgreementPrivateKey::from_fvk(&self.derive_internal()),
         }
-        .address(d)
+        .address(d);
+        self.wrap_raw_address(raw)
+    }
+
+    /// Returns the payment address for this key at the given index, or
+    /// [`MissingPqSeed`] if the PQ seed needed to derive the per-diversifier
+    /// encapsulation key is not attached.
+    ///
+    /// This is the non-panicking counterpart to [`address_at`](Self::address_at), and
+    /// is the recommended API for keys that may have been deserialized via
+    /// [`from_bytes`](Self::from_bytes) (which does not carry the PQ seed).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn try_address_at(
+        &self,
+        j: impl Into<DiversifierIndex>,
+        scope: Scope,
+    ) -> Result<Address, MissingPqSeed> {
+        let raw = self.to_ivk(scope).address_at(j);
+        self.try_wrap_raw_address(raw)
+    }
+
+    /// Returns the payment address for the given diversifier, or [`MissingPqSeed`]
+    /// if the PQ seed needed to derive the per-diversifier encapsulation key is not
+    /// attached.
+    ///
+    /// Non-panicking counterpart to [`address`](Self::address).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn try_address(&self, d: Diversifier, scope: Scope) -> Result<Address, MissingPqSeed> {
+        let raw = match scope {
+            Scope::External => KeyAgreementPrivateKey::from_fvk(self),
+            Scope::Internal => KeyAgreementPrivateKey::from_fvk(&self.derive_internal()),
+        }
+        .address(d);
+        self.try_wrap_raw_address(raw)
+    }
+
+    /// Wraps a [`RawAddress`] into a full [`Address`].
+    ///
+    /// In hybrid-kem mode, this derives the per-diversifier PQ encapsulation key
+    /// from the FVK's `pq_seed` and the address's diversifier.
+    ///
+    /// # Panics
+    ///
+    /// In hybrid-kem mode, panics if the FVK lacks a PQ seed. Internal callers that
+    /// need to handle this gracefully should use
+    /// [`try_wrap_raw_address`](Self::try_wrap_raw_address).
+    fn wrap_raw_address(&self, raw: RawAddress) -> Address {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            self.try_wrap_raw_address(raw)
+                .expect("FullViewingKey must have pq_seed to derive an Address")
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
+        {
+            raw
+        }
+    }
+
+    /// Fallibly wraps a [`RawAddress`] into a full [`Address`], deriving the
+    /// per-diversifier PQ encapsulation key from the FVK's `pq_seed`.
+    #[cfg(feature = "hybrid-kem")]
+    fn try_wrap_raw_address(&self, raw: RawAddress) -> Result<Address, MissingPqSeed> {
+        let pq_seed = self.pq_seed.as_ref().ok_or(MissingPqSeed)?;
+        let ek_pq = pq_seed.ek_pq_for_diversifier(&raw.diversifier());
+        Ok(Address::from_parts(raw, ek_pq))
     }
 
     /// Returns the scope of the given address, or `None` if the address is not derived
     /// from this full viewing key.
-    pub fn scope_for_address(&self, address: &Address) -> Option<Scope> {
+    pub fn scope_for_address(&self, address: &RawAddress) -> Option<Scope> {
         [Scope::External, Scope::Internal]
             .into_iter()
             .find(|scope| self.to_ivk(*scope).diversifier_index(address).is_some())
@@ -441,7 +558,13 @@ impl FullViewingKey {
         let nk = NullifierDerivingKey::from_bytes(&bytes[32..64])?;
         let rivk = CommitIvkRandomness::from_bytes(&bytes[64..])?;
 
-        let fvk = FullViewingKey { ak, nk, rivk };
+        let fvk = FullViewingKey {
+            ak,
+            nk,
+            rivk,
+            #[cfg(feature = "hybrid-kem")]
+            pq_seed: None,
+        };
 
         // If either ivk is 0 or ⊥, this FVK is invalid.
         let _: NonZeroPallasBase = Option::from(KeyAgreementPrivateKey::derive_inner(&fvk))?;
@@ -449,6 +572,42 @@ impl FullViewingKey {
             Option::from(KeyAgreementPrivateKey::derive_inner(&fvk.derive_internal()))?;
 
         Some(fvk)
+    }
+
+    /// Serializes the full viewing key **including** its PQ seed as a 160-byte blob:
+    /// the canonical 96-byte FVK encoding followed by the 64-byte `pq_seed`.
+    ///
+    /// Unlike [`to_bytes`](Self::to_bytes) — which follows the upstream 96-byte spec and
+    /// drops the PQ seed — this preserves the full hybrid *viewing capability* across a
+    /// round-trip, so a reloaded key can derive addresses and scan hybrid notes without
+    /// having to re-attach the seed via [`set_pq_seed`](Self::set_pq_seed).
+    ///
+    /// Returns `None` if this FVK has no PQ seed attached (e.g. it was itself parsed via
+    /// [`from_bytes`](Self::from_bytes)).
+    ///
+    /// # Security
+    ///
+    /// The output contains the secret `pq_seed`; treat it with at least the same care as
+    /// the FVK itself, since it grants the ability to decrypt incoming hybrid notes.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn to_bytes_with_pq(&self) -> Option<[u8; 160]> {
+        let pq_seed = self.pq_seed.as_ref()?;
+        let mut result = [0u8; 160];
+        result[..96].copy_from_slice(&self.to_bytes());
+        result[96..].copy_from_slice(pq_seed.as_bytes());
+        Some(result)
+    }
+
+    /// Parses a full viewing key from the 160-byte PQ-preserving encoding produced by
+    /// [`to_bytes_with_pq`](Self::to_bytes_with_pq) (96-byte FVK ‖ 64-byte `pq_seed`),
+    /// restoring the PQ seed so the key retains full hybrid viewing capability.
+    ///
+    /// Returns `None` if the embedded 96-byte FVK encoding is invalid.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn from_bytes_with_pq(bytes: &[u8; 160]) -> Option<Self> {
+        let fvk_bytes: &[u8; 96] = bytes[..96].try_into().expect("96-byte prefix");
+        let pq_bytes: [u8; 64] = bytes[96..].try_into().expect("64-byte suffix");
+        Self::from_bytes(fvk_bytes).map(|fvk| fvk.with_pq_seed(PqSeed::from_bytes(pq_bytes)))
     }
 
     /// Derives an internal full viewing key from a full viewing key, as specified in
@@ -460,6 +619,8 @@ impl FullViewingKey {
             ak: self.ak.clone(),
             nk: self.nk,
             rivk: self.rivk(Scope::Internal),
+            #[cfg(feature = "hybrid-kem")]
+            pq_seed: self.pq_seed.clone(),
         }
     }
 
@@ -477,6 +638,36 @@ impl FullViewingKey {
             Scope::External => OutgoingViewingKey::from_fvk(self),
             Scope::Internal => OutgoingViewingKey::from_fvk(&self.derive_internal()),
         }
+    }
+
+    /// Returns the PQ seed, if available.
+    ///
+    /// This is `Some` when the FVK was derived from a [`SpendingKey`] or when
+    /// explicitly set via [`set_pq_seed`](Self::set_pq_seed), and `None`
+    /// when deserialized from bytes without re-attaching the seed.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn pq_seed(&self) -> Option<&PqSeed> {
+        self.pq_seed.as_ref()
+    }
+
+    /// Sets the PQ seed on this full viewing key.
+    ///
+    /// This is needed after deserializing an FVK via [`from_bytes`](Self::from_bytes),
+    /// which does not include the PQ seed. Without a PQ seed, calling
+    /// [`address_at`](Self::address_at) or [`address`](Self::address) will panic
+    /// when the `hybrid-kem` feature is enabled.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn set_pq_seed(&mut self, pq_seed: PqSeed) {
+        self.pq_seed = Some(pq_seed);
+    }
+
+    /// Returns a copy of this FVK with the given PQ seed attached.
+    ///
+    /// This is a builder-style alternative to [`set_pq_seed`](Self::set_pq_seed).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn with_pq_seed(mut self, pq_seed: PqSeed) -> Self {
+        self.pq_seed = Some(pq_seed);
+        self
     }
 }
 
@@ -605,10 +796,10 @@ impl KeyAgreementPrivateKey {
     }
 
     /// Returns the payment address for this key corresponding to the given diversifier.
-    fn address(&self, d: Diversifier) -> Address {
+    fn address(&self, d: Diversifier) -> RawAddress {
         let prepared_ivk = PreparedIncomingViewingKey::new_inner(self);
         let pk_d = DiversifiedTransmissionKey::derive(&prepared_ivk, &d);
-        Address::from_parts(d, pk_d)
+        RawAddress::from_parts(d, pk_d)
     }
 }
 
@@ -624,10 +815,33 @@ impl KeyAgreementPrivateKey {
 /// Defined in [Zcash Protocol Spec § 5.6.4.3: Orchard Raw Incoming Viewing Keys][orchardinviewingkeyencoding].
 ///
 /// [orchardinviewingkeyencoding]: https://zips.z.cash/protocol/nu5.pdf#orchardinviewingkeyencoding
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug)]
 pub struct IncomingViewingKey {
     dk: DiversifierKey,
     ivk: KeyAgreementPrivateKey,
+    #[cfg(feature = "hybrid-kem")]
+    pq_seed: Option<PqSeed>,
+}
+
+// IVK identity is determined by (dk, ivk) only — PQ dk is supplementary.
+impl PartialEq for IncomingViewingKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.dk == other.dk && self.ivk == other.ivk
+    }
+}
+
+impl Eq for IncomingViewingKey {}
+
+impl PartialOrd for IncomingViewingKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for IncomingViewingKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        (&self.dk, &self.ivk).cmp(&(&other.dk, &other.ivk))
+    }
 }
 
 impl IncomingViewingKey {
@@ -636,6 +850,8 @@ impl IncomingViewingKey {
         IncomingViewingKey {
             dk: fvk.derive_dk_ovk().0,
             ivk: KeyAgreementPrivateKey::from_fvk(fvk),
+            #[cfg(feature = "hybrid-kem")]
+            pq_seed: fvk.pq_seed.clone(),
         }
     }
 }
@@ -657,14 +873,49 @@ impl IncomingViewingKey {
             IncomingViewingKey {
                 dk: DiversifierKey(bytes[..32].try_into().unwrap()),
                 ivk: KeyAgreementPrivateKey(ivk.into()),
+                #[cfg(feature = "hybrid-kem")]
+                pq_seed: None,
             }
         })
+    }
+
+    /// Serializes the incoming viewing key **including** its PQ seed as a 128-byte blob:
+    /// the canonical 64-byte IVK encoding followed by the 64-byte `pq_seed`.
+    ///
+    /// Unlike [`to_bytes`](Self::to_bytes) — which follows the upstream 64-byte spec and
+    /// drops the PQ seed (so a reloaded IVK silently fails to see hybrid notes) — this
+    /// preserves the full hybrid viewing capability across a round-trip.
+    ///
+    /// Returns `None` if this IVK has no PQ seed attached.
+    ///
+    /// # Security
+    ///
+    /// The output contains the secret `pq_seed`; treat it with at least the same care as
+    /// the IVK itself.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn to_bytes_with_pq(&self) -> Option<[u8; 128]> {
+        let pq_seed = self.pq_seed.as_ref()?;
+        let mut result = [0u8; 128];
+        result[..64].copy_from_slice(&self.to_bytes());
+        result[64..].copy_from_slice(pq_seed.as_bytes());
+        Some(result)
+    }
+
+    /// Parses an incoming viewing key from the 128-byte PQ-preserving encoding produced by
+    /// [`to_bytes_with_pq`](Self::to_bytes_with_pq) (64-byte IVK ‖ 64-byte `pq_seed`),
+    /// restoring the PQ seed so the key retains full hybrid viewing capability.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn from_bytes_with_pq(bytes: &[u8; 128]) -> Option<Self> {
+        let ivk_bytes: &[u8; 64] = bytes[..64].try_into().expect("64-byte prefix");
+        let pq_bytes: [u8; 64] = bytes[64..].try_into().expect("64-byte suffix");
+        let ivk: IncomingViewingKey = Option::from(Self::from_bytes(ivk_bytes))?;
+        Some(ivk.with_pq_seed(PqSeed::from_bytes(pq_bytes)))
     }
 
     /// Checks whether the given address was derived from this incoming viewing
     /// key, and returns the diversifier index used to derive the address if
     /// so. Returns `None` if the address was not derived from this key.
-    pub fn diversifier_index(&self, addr: &Address) -> Option<DiversifierIndex> {
+    pub fn diversifier_index(&self, addr: &RawAddress) -> Option<DiversifierIndex> {
         let j = self.dk.diversifier_index(&addr.diversifier());
         if &self.address_at(j) == addr {
             Some(j)
@@ -673,13 +924,13 @@ impl IncomingViewingKey {
         }
     }
 
-    /// Returns the payment address for this key at the given index.
-    pub fn address_at(&self, j: impl Into<DiversifierIndex>) -> Address {
+    /// Returns the raw payment address for this key at the given index.
+    pub fn address_at(&self, j: impl Into<DiversifierIndex>) -> RawAddress {
         self.address(self.dk.get(j))
     }
 
-    /// Returns the payment address for this key corresponding to the given diversifier.
-    pub fn address(&self, d: Diversifier) -> Address {
+    /// Returns the raw payment address for this key corresponding to the given diversifier.
+    pub fn address(&self, d: Diversifier) -> RawAddress {
         self.ivk.address(d)
     }
 
@@ -687,20 +938,49 @@ impl IncomingViewingKey {
     pub fn prepare(&self) -> PreparedIncomingViewingKey {
         PreparedIncomingViewingKey::new(self)
     }
+
+    /// Sets the PQ seed on this incoming viewing key.
+    ///
+    /// This is needed after deserializing an IVK via [`from_bytes`](Self::from_bytes),
+    /// which does not include the PQ seed. Without a PQ seed, hybrid note decryption
+    /// silently falls back to ECDH-only, which will fail to decrypt hybrid-mode notes.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn set_pq_seed(&mut self, pq_seed: PqSeed) {
+        self.pq_seed = Some(pq_seed);
+    }
+
+    /// Returns a copy of this IVK with the given PQ seed attached.
+    ///
+    /// This is a builder-style alternative to [`set_pq_seed`](Self::set_pq_seed).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn with_pq_seed(mut self, pq_seed: PqSeed) -> Self {
+        self.pq_seed = Some(pq_seed);
+        self
+    }
+
+    /// Returns the PQ seed, if available.
+    #[cfg(feature = "hybrid-kem")]
+    pub fn pq_seed(&self) -> Option<&PqSeed> {
+        self.pq_seed.as_ref()
+    }
 }
 
 /// An Orchard incoming viewing key that has been precomputed for trial decryption.
 #[derive(Clone, Debug)]
-pub struct PreparedIncomingViewingKey(PreparedNonZeroScalar);
+pub struct PreparedIncomingViewingKey {
+    ecdh: PreparedNonZeroScalar,
+    #[cfg(feature = "hybrid-kem")]
+    pub(crate) pq_seed: Option<PqSeed>,
+}
 
 #[cfg(feature = "std")]
 impl memuse::DynamicUsage for PreparedIncomingViewingKey {
     fn dynamic_usage(&self) -> usize {
-        self.0.dynamic_usage()
+        self.ecdh.dynamic_usage()
     }
 
     fn dynamic_usage_bounds(&self) -> (usize, Option<usize>) {
-        self.0.dynamic_usage_bounds()
+        self.ecdh.dynamic_usage_bounds()
     }
 }
 
@@ -708,11 +988,23 @@ impl PreparedIncomingViewingKey {
     /// Performs the necessary precomputations to use an `IncomingViewingKey` for note
     /// decryption.
     pub fn new(ivk: &IncomingViewingKey) -> Self {
+        #[cfg(feature = "hybrid-kem")]
+        {
+            PreparedIncomingViewingKey {
+                ecdh: PreparedNonZeroScalar::new(&ivk.ivk.0),
+                pq_seed: ivk.pq_seed.clone(),
+            }
+        }
+        #[cfg(not(feature = "hybrid-kem"))]
         Self::new_inner(&ivk.ivk)
     }
 
     fn new_inner(ivk: &KeyAgreementPrivateKey) -> Self {
-        Self(PreparedNonZeroScalar::new(&ivk.0))
+        PreparedIncomingViewingKey {
+            ecdh: PreparedNonZeroScalar::new(&ivk.0),
+            #[cfg(feature = "hybrid-kem")]
+            pq_seed: None,
+        }
     }
 }
 
@@ -747,6 +1039,166 @@ impl AsRef<[u8; 32]> for OutgoingViewingKey {
     }
 }
 
+/// A 64-byte seed from which per-diversifier ML-KEM-768 keypairs are derived.
+///
+/// Stored in [`FullViewingKey`] and propagated to [`IncomingViewingKey`] and
+/// [`PreparedIncomingViewingKey`]. Each diversifier produces a unique PQ keypair:
+///
+/// ```text
+/// pq_seed_d = BLAKE2b-512("DashPQ_DivSeed__", pq_seed || diversifier)
+/// (ek_pq_d, dk_pq_d) = ML-KEM-768.KeyGen(pq_seed_d)
+/// ```
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone)]
+pub struct PqSeed(pub(crate) [u8; 64]);
+
+#[cfg(feature = "hybrid-kem")]
+impl core::fmt::Debug for PqSeed {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("PqSeed")
+            .field(&format_args!("64 bytes"))
+            .finish()
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl PqSeed {
+    /// Derives both the PQ encapsulation and decapsulation keys for a given diversifier.
+    ///
+    /// Use this when you need both keys to avoid running ML-KEM KeyGen twice.
+    pub fn keypair_for_diversifier(
+        &self,
+        diversifier: &Diversifier,
+    ) -> (PqEncapsulationKey, PqDecapsulationKey) {
+        let (ek, dk) =
+            hybrid_kem::generate_pq_keypair_for_diversifier(&self.0, diversifier.as_array());
+        (PqEncapsulationKey(ek), PqDecapsulationKey(dk))
+    }
+
+    /// Derives the PQ encapsulation key for a given diversifier.
+    pub fn ek_pq_for_diversifier(&self, diversifier: &Diversifier) -> PqEncapsulationKey {
+        self.keypair_for_diversifier(diversifier).0
+    }
+
+    /// Derives the PQ decapsulation key for a given diversifier.
+    pub fn dk_pq_for_diversifier(&self, diversifier: &Diversifier) -> PqDecapsulationKey {
+        self.keypair_for_diversifier(diversifier).1
+    }
+
+    /// Returns the raw bytes of this seed.
+    pub fn as_bytes(&self) -> &[u8; 64] {
+        &self.0
+    }
+
+    /// Constructs a PQ seed from raw bytes.
+    ///
+    /// Use this to re-attach a PQ seed to a deserialized [`FullViewingKey`] or
+    /// [`IncomingViewingKey`] (via `set_pq_seed` / `with_pq_seed`). The bytes
+    /// typically come from [`SpendingKey::pq_seed`].
+    pub fn from_bytes(bytes: [u8; 64]) -> Self {
+        PqSeed(bytes)
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl From<[u8; 64]> for PqSeed {
+    fn from(bytes: [u8; 64]) -> Self {
+        PqSeed(bytes)
+    }
+}
+
+/// Error returned when deriving an [`Address`] requires a PQ seed that is not
+/// attached to the [`FullViewingKey`].
+///
+/// This occurs when an FVK was deserialized via
+/// [`FullViewingKey::from_bytes`] (which does not carry the PQ seed) and then used
+/// to derive an address without first re-attaching the seed via
+/// [`set_pq_seed`](FullViewingKey::set_pq_seed) /
+/// [`with_pq_seed`](FullViewingKey::with_pq_seed).
+#[cfg(feature = "hybrid-kem")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct MissingPqSeed;
+
+#[cfg(feature = "hybrid-kem")]
+impl core::fmt::Display for MissingPqSeed {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("FullViewingKey has no PQ seed attached; re-attach it with set_pq_seed/with_pq_seed before deriving an address")
+    }
+}
+
+#[cfg(all(feature = "hybrid-kem", feature = "std"))]
+impl std::error::Error for MissingPqSeed {}
+
+/// An ML-KEM-768 encapsulation key (public key) for post-quantum key exchange.
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone, Debug)]
+pub struct PqEncapsulationKey(pub(crate) [u8; PQ_EK_SIZE]);
+
+#[cfg(feature = "hybrid-kem")]
+impl PqEncapsulationKey {
+    /// Returns the raw bytes.
+    pub fn as_bytes(&self) -> &[u8; PQ_EK_SIZE] {
+        &self.0
+    }
+
+    /// Constructs from raw bytes.
+    pub fn from_bytes(bytes: [u8; PQ_EK_SIZE]) -> Self {
+        PqEncapsulationKey(bytes)
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl PartialEq for PqEncapsulationKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0[..] == other.0[..]
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl Eq for PqEncapsulationKey {}
+
+#[cfg(feature = "hybrid-kem")]
+impl PartialOrd for PqEncapsulationKey {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl Ord for PqEncapsulationKey {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0[..].cmp(&other.0[..])
+    }
+}
+
+/// An ML-KEM-768 decapsulation key (private key) for post-quantum key exchange.
+#[cfg(feature = "hybrid-kem")]
+#[derive(Clone)]
+pub struct PqDecapsulationKey(pub(crate) [u8; PQ_DK_SIZE]);
+
+#[cfg(feature = "hybrid-kem")]
+impl core::fmt::Debug for PqDecapsulationKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_tuple("PqDecapsulationKey")
+            .field(&format_args!("{} bytes", PQ_DK_SIZE))
+            .finish()
+    }
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl PqDecapsulationKey {
+    /// Returns the raw bytes.
+    pub fn as_bytes(&self) -> &[u8; PQ_DK_SIZE] {
+        &self.0
+    }
+
+    /// Constructs from raw bytes.
+    pub fn from_bytes(bytes: [u8; PQ_DK_SIZE]) -> Self {
+        PqDecapsulationKey(bytes)
+    }
+}
+
 /// The diversified transmission key for a given payment address.
 ///
 /// Defined in [Zcash Protocol Spec § 4.2.3: Orchard Key Components][orchardkeycomponents].
@@ -769,7 +1221,7 @@ impl DiversifiedTransmissionKey {
     /// [orchardkeycomponents]: https://zips.z.cash/protocol/nu5.pdf#orchardkeycomponents
     pub(crate) fn derive(ivk: &PreparedIncomingViewingKey, d: &Diversifier) -> Self {
         let g_d = PreparedNonIdentityBase::new(diversify_hash(d.as_array()));
-        DiversifiedTransmissionKey(ka_orchard_prepared(&ivk.0, &g_d))
+        DiversifiedTransmissionKey(ka_orchard_prepared(&ivk.ecdh, &g_d))
     }
 
     /// $abst_P(bytes)$
@@ -803,25 +1255,41 @@ impl ConditionallySelectable for DiversifiedTransmissionKey {
 ///
 /// [concreteorchardkeyagreement]: https://zips.z.cash/protocol/nu5.pdf#concreteorchardkeyagreement
 #[derive(Debug)]
-pub struct EphemeralSecretKey(pub(crate) NonZeroPallasScalar);
+pub struct EphemeralSecretKey {
+    pub(crate) ecdh: NonZeroPallasScalar,
+    #[cfg(feature = "hybrid-kem")]
+    pub(crate) pq_randomness: [u8; 32],
+}
 
 impl ConstantTimeEq for EphemeralSecretKey {
     fn ct_eq(&self, other: &Self) -> subtle::Choice {
-        self.0.ct_eq(&other.0)
+        // Only compare the ECDH scalar. The pq_randomness field is derived from
+        // (rseed, rho) and does not roundtrip through the outgoing plaintext,
+        // so it may differ between extracted and derived ESKs.
+        self.ecdh.ct_eq(&other.ecdh)
     }
 }
 
 impl EphemeralSecretKey {
     pub(crate) fn from_bytes(bytes: &[u8; 32]) -> CtOption<Self> {
-        NonZeroPallasScalar::from_bytes(bytes).map(EphemeralSecretKey)
+        NonZeroPallasScalar::from_bytes(bytes).map(|scalar| EphemeralSecretKey {
+            ecdh: scalar,
+            #[cfg(feature = "hybrid-kem")]
+            pq_randomness: [0u8; 32],
+        })
     }
 
     pub(crate) fn derive_public(&self, g_d: NonIdentityPallasPoint) -> EphemeralPublicKey {
-        EphemeralPublicKey(ka_orchard(&self.0, &g_d))
+        EphemeralPublicKey(ka_orchard(&self.ecdh, &g_d))
     }
 
     pub(crate) fn agree(&self, pk_d: &DiversifiedTransmissionKey) -> SharedSecret {
-        SharedSecret(ka_orchard(&self.0, &pk_d.0))
+        SharedSecret(ka_orchard(&self.ecdh, &pk_d.0))
+    }
+
+    /// Returns the ECDH scalar.
+    pub(crate) fn ecdh_scalar(&self) -> &NonZeroPallasScalar {
+        &self.ecdh
     }
 }
 
@@ -862,7 +1330,7 @@ impl PreparedEphemeralPublicKey {
     }
 
     pub(crate) fn agree(&self, ivk: &PreparedIncomingViewingKey) -> SharedSecret {
-        SharedSecret(ka_orchard_prepared(&ivk.0, &self.0))
+        SharedSecret(ka_orchard_prepared(&ivk.ecdh, &self.0))
     }
 }
 
@@ -875,6 +1343,11 @@ impl PreparedEphemeralPublicKey {
 pub struct SharedSecret(NonIdentityPallasPoint);
 
 impl SharedSecret {
+    /// Extracts the inner Pallas point.
+    pub(crate) fn inner(self) -> NonIdentityPallasPoint {
+        self.0
+    }
+
     /// For checking test vectors only.
     #[cfg(test)]
     pub(crate) fn to_bytes(&self) -> [u8; 32] {
@@ -921,6 +1394,45 @@ impl SharedSecret {
             .update(&secret.to_bytes())
             .update(&ephemeral_key.0)
             .finalize()
+    }
+}
+
+/// A shared secret combining ECDH and ML-KEM for hybrid post-quantum key exchange.
+///
+/// Shared secret produced by hybrid key agreement (ECDH + ML-KEM).
+///
+/// This type carries the ECDH shared secret, the ML-KEM shared secret, and the ML-KEM
+/// ciphertext. The KDF binds all four inputs (both shared secrets, the PQ ciphertext,
+/// and the ephemeral public key), following the X-Wing security proof approach.
+#[cfg(feature = "hybrid-kem")]
+#[derive(Debug)]
+pub struct HybridSharedSecret {
+    pub(crate) ecdh: NonIdentityPallasPoint,
+    pub(crate) pq_ss: [u8; 32],
+    pub(crate) ct_pq: [u8; PQ_CT_SIZE],
+}
+
+#[cfg(feature = "hybrid-kem")]
+impl HybridSharedSecret {
+    /// Derives the symmetric key using the hybrid KDF.
+    ///
+    /// Binds both shared secrets, the PQ ciphertext, and the ephemeral public key.
+    pub(crate) fn kdf_hybrid(&self, ephemeral_key: &EphemeralKeyBytes) -> Blake2bHash {
+        let ss_ecdh = self.ecdh.to_affine().to_bytes();
+        Params::new()
+            .hash_length(32)
+            .personal(hybrid_kem::HYBRID_KDF_PERSONALIZATION)
+            .to_state()
+            .update(&ss_ecdh)
+            .update(&self.pq_ss)
+            .update(&self.ct_pq)
+            .update(&ephemeral_key.0)
+            .finalize()
+    }
+
+    /// Returns the PQ ciphertext that must be transmitted alongside the encrypted note.
+    pub(crate) fn ct_pq(&self) -> &[u8; PQ_CT_SIZE] {
+        &self.ct_pq
     }
 }
 
@@ -1071,7 +1583,7 @@ mod tests {
 
             let rho = Rho::from_bytes(&tv.note_rho).unwrap();
             let note = Note::from_parts(
-                addr,
+                *addr.raw(),
                 NoteValue::from_raw(tv.note_v),
                 rho,
                 RandomSeed::from_bytes(tv.note_rseed, &rho).unwrap(),
@@ -1093,5 +1605,165 @@ mod tests {
             let internal_ovk = fvk.to_ovk(Scope::Internal);
             assert_eq!(internal_ovk.0, tv.internal_ovk);
         }
+    }
+}
+
+#[cfg(all(test, feature = "hybrid-kem"))]
+mod hybrid_key_tests {
+    use super::*;
+
+    fn sk() -> SpendingKey {
+        SpendingKey::from_bytes([7; 32]).unwrap()
+    }
+
+    #[test]
+    fn pq_seed_construct_and_roundtrip() {
+        let seed_bytes = sk().pq_seed();
+        let seed = PqSeed::from_bytes(seed_bytes);
+        assert_eq!(seed.as_bytes(), &seed_bytes);
+
+        let from_into: PqSeed = seed_bytes.into();
+        assert_eq!(from_into.as_bytes(), &seed_bytes);
+
+        // Debug must not leak the raw seed bytes.
+        assert_eq!(format!("{:?}", seed), "PqSeed(64 bytes)");
+    }
+
+    #[test]
+    fn pq_seed_per_diversifier_keys() {
+        let seed = PqSeed::from_bytes(sk().pq_seed());
+        let d = Diversifier::from_bytes([3; 11]);
+
+        let (ek, dk) = seed.keypair_for_diversifier(&d);
+        assert_eq!(ek, seed.ek_pq_for_diversifier(&d));
+        assert_eq!(dk.as_bytes(), seed.dk_pq_for_diversifier(&d).as_bytes());
+
+        // Different diversifiers yield different keypairs (unlinkability).
+        let d2 = Diversifier::from_bytes([4; 11]);
+        assert_ne!(ek, seed.ek_pq_for_diversifier(&d2));
+    }
+
+    #[test]
+    fn pq_encapsulation_key_roundtrip_and_ord() {
+        let seed = PqSeed::from_bytes(sk().pq_seed());
+        let ek = seed.ek_pq_for_diversifier(&Diversifier::from_bytes([1; 11]));
+
+        let ek_rt = PqEncapsulationKey::from_bytes(*ek.as_bytes());
+        assert_eq!(ek, ek_rt);
+        assert_eq!(ek.cmp(&ek_rt), core::cmp::Ordering::Equal);
+        assert_eq!(ek.partial_cmp(&ek_rt), Some(core::cmp::Ordering::Equal));
+
+        let ek2 = seed.ek_pq_for_diversifier(&Diversifier::from_bytes([2; 11]));
+        assert_ne!(ek, ek2);
+        // Ord is consistent with a byte-wise comparison.
+        assert_eq!(ek.cmp(&ek2), ek.as_bytes()[..].cmp(&ek2.as_bytes()[..]));
+        let _ = format!("{:?}", ek);
+    }
+
+    #[test]
+    fn pq_decapsulation_key_roundtrip() {
+        let seed = PqSeed::from_bytes(sk().pq_seed());
+        let dk = seed.dk_pq_for_diversifier(&Diversifier::from_bytes([5; 11]));
+
+        let dk_rt = PqDecapsulationKey::from_bytes(*dk.as_bytes());
+        assert_eq!(dk.as_bytes(), dk_rt.as_bytes());
+        // Debug must not leak the raw key bytes.
+        assert!(format!("{:?}", dk).contains("bytes"));
+    }
+
+    #[test]
+    fn fvk_pq_seed_accessors() {
+        let fvk = FullViewingKey::from(&sk());
+        assert!(fvk.pq_seed().is_some());
+
+        // A deserialized FVK loses its PQ seed.
+        let mut fvk2 = FullViewingKey::from_bytes(&fvk.to_bytes()).unwrap();
+        assert!(fvk2.pq_seed().is_none());
+
+        // set_pq_seed re-attaches it, restoring address derivation.
+        fvk2.set_pq_seed(PqSeed::from_bytes(sk().pq_seed()));
+        assert!(fvk2.pq_seed().is_some());
+        assert_eq!(
+            fvk2.address_at(0u32, Scope::External),
+            fvk.address_at(0u32, Scope::External)
+        );
+
+        // with_pq_seed is the builder-style equivalent.
+        let fvk3 = FullViewingKey::from_bytes(&fvk.to_bytes())
+            .unwrap()
+            .with_pq_seed(PqSeed::from_bytes(sk().pq_seed()));
+        assert_eq!(fvk3.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
+    }
+
+    #[test]
+    fn ivk_pq_seed_accessors() {
+        let ivk = FullViewingKey::from(&sk()).to_ivk(Scope::External);
+        assert!(ivk.pq_seed().is_some());
+
+        let mut ivk2: IncomingViewingKey =
+            Option::from(IncomingViewingKey::from_bytes(&ivk.to_bytes())).unwrap();
+        assert!(ivk2.pq_seed().is_none());
+
+        ivk2.set_pq_seed(PqSeed::from_bytes(sk().pq_seed()));
+        assert!(ivk2.pq_seed().is_some());
+
+        let ivk3: IncomingViewingKey =
+            Option::from(IncomingViewingKey::from_bytes(&ivk.to_bytes()))
+                .map(|k: IncomingViewingKey| k.with_pq_seed(PqSeed::from_bytes(sk().pq_seed())))
+                .unwrap();
+        assert_eq!(ivk3.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
+    }
+
+    #[test]
+    fn try_address_is_non_panicking() {
+        let fvk = FullViewingKey::from(&sk());
+        let d = Diversifier::from_bytes([9; 11]);
+
+        // With a PQ seed, the fallible methods succeed and match the panicking ones.
+        assert_eq!(
+            fvk.try_address_at(0u32, Scope::External).unwrap(),
+            fvk.address_at(0u32, Scope::External)
+        );
+        assert_eq!(
+            fvk.try_address(d, Scope::External).unwrap(),
+            fvk.address(d, Scope::External)
+        );
+
+        // A deserialized FVK without a PQ seed returns an error instead of panicking.
+        let fvk2 = FullViewingKey::from_bytes(&fvk.to_bytes()).unwrap();
+        assert_eq!(
+            fvk2.try_address_at(0u32, Scope::External),
+            Err(MissingPqSeed)
+        );
+        assert_eq!(fvk2.try_address(d, Scope::External), Err(MissingPqSeed));
+    }
+
+    #[test]
+    fn fvk_ivk_with_pq_roundtrip() {
+        let fvk = FullViewingKey::from(&sk());
+
+        // FVK: the PQ-preserving round-trip retains the seed and address capability.
+        let blob = fvk.to_bytes_with_pq().expect("fvk has pq_seed");
+        // The 160-byte blob is exactly the canonical 96-byte encoding plus the seed.
+        assert_eq!(&blob[..96], &fvk.to_bytes()[..]);
+        let fvk_rt = FullViewingKey::from_bytes_with_pq(&blob).expect("valid blob");
+        assert_eq!(fvk_rt.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
+        assert_eq!(
+            fvk_rt.address_at(0u32, Scope::External),
+            fvk.address_at(0u32, Scope::External)
+        );
+
+        // A seed-less FVK cannot produce the PQ-preserving blob.
+        assert!(FullViewingKey::from_bytes(&fvk.to_bytes())
+            .unwrap()
+            .to_bytes_with_pq()
+            .is_none());
+
+        // IVK: same PQ-preserving round-trip.
+        let ivk = fvk.to_ivk(Scope::External);
+        let iblob = ivk.to_bytes_with_pq().expect("ivk has pq_seed");
+        assert_eq!(&iblob[..64], &ivk.to_bytes()[..]);
+        let ivk_rt = IncomingViewingKey::from_bytes_with_pq(&iblob).expect("valid blob");
+        assert_eq!(ivk_rt.pq_seed().unwrap().as_bytes(), &sk().pq_seed());
     }
 }

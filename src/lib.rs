@@ -35,6 +35,8 @@ pub mod circuit;
 mod constants;
 #[cfg(feature = "unstable-voting-circuits")]
 pub mod constants;
+#[cfg(feature = "hybrid-kem")]
+pub mod hybrid_kem;
 pub mod keys;
 pub mod memo;
 pub mod note;
@@ -53,7 +55,9 @@ pub mod zip32;
 mod test_vectors;
 
 pub use action::{Action, ActionFromPartsError};
-pub use address::Address;
+#[cfg(feature = "hybrid-kem")]
+pub use address::HYBRID_ADDRESS_SIZE;
+pub use address::{Address, RawAddress};
 pub use bundle::Bundle;
 pub use constants::MERKLE_DEPTH_ORCHARD as NOTE_COMMITMENT_TREE_DEPTH;
 pub use constants::{L_ORCHARD_BASE, L_ORCHARD_SCALAR, L_VALUE};

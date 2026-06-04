@@ -13,6 +13,7 @@ use zip32::ChildIndex;
 
 use super::{Action, Bundle, Output, Spend, Zip32Derivation};
 use crate::{
+    address::RawAddress,
     bundle::Flags,
     keys::{FullViewingKey, SpendingKey},
     memo::MemoSize,
@@ -20,7 +21,7 @@ use crate::{
     primitives::redpallas::{self, SpendAuth},
     tree::{MerkleHashOrchard, MerklePath},
     value::{NoteValue, Sign, ValueCommitTrapdoor, ValueCommitment, ValueSum},
-    Address, Anchor, Proof, NOTE_COMMITMENT_TREE_DEPTH,
+    Anchor, Proof, NOTE_COMMITMENT_TREE_DEPTH,
 };
 
 impl<M: MemoSize> Bundle<M> {
@@ -129,7 +130,7 @@ impl Spend {
         let recipient = recipient
             .as_ref()
             .map(|r| {
-                Address::from_raw_address_bytes(r)
+                RawAddress::from_raw_address_bytes(r)
                     .into_option()
                     .ok_or(ParseError::InvalidRecipient)
             })
@@ -217,6 +218,8 @@ impl<M: MemoSize> Output<M> {
         ephemeral_key: [u8; 32],
         enc_ciphertext: Vec<u8>,
         out_ciphertext: Vec<u8>,
+        #[cfg(feature = "hybrid-kem")] ct_pq: Option<[u8; 1088]>,
+        #[cfg(feature = "hybrid-kem")] diversifier_hint: Option<[u8; 11]>,
         recipient: Option<[u8; 43]>,
         value: Option<u64>,
         rseed: Option<[u8; 32]>,
@@ -231,20 +234,39 @@ impl<M: MemoSize> Output<M> {
 
         let enc_ciphertext_bytes = NoteBytes::from_slice(enc_ciphertext.as_slice())
             .ok_or(ParseError::InvalidEncCiphertext)?;
-        let out_ciphertext_bytes: [u8; 80] = out_ciphertext
-            .as_slice()
-            .try_into()
-            .map_err(|_| ParseError::InvalidOutCiphertext)?;
-        let encrypted_note = TransmittedNoteCiphertext::from_parts(
-            ephemeral_key,
-            enc_ciphertext_bytes,
-            out_ciphertext_bytes,
-        );
+        #[cfg(not(feature = "hybrid-kem"))]
+        let encrypted_note = {
+            let out_ciphertext_bytes: [u8; 80] = out_ciphertext
+                .as_slice()
+                .try_into()
+                .map_err(|_| ParseError::InvalidOutCiphertext)?;
+            TransmittedNoteCiphertext::from_parts(
+                ephemeral_key,
+                enc_ciphertext_bytes,
+                out_ciphertext_bytes,
+            )
+        };
+        #[cfg(feature = "hybrid-kem")]
+        let encrypted_note = {
+            let ct_pq = ct_pq.ok_or(ParseError::MissingPqCiphertext)?;
+            let div_hint = diversifier_hint.ok_or(ParseError::MissingDiversifierHint)?;
+            let out_ciphertext_bytes: [u8; 112] = out_ciphertext
+                .as_slice()
+                .try_into()
+                .map_err(|_| ParseError::InvalidOutCiphertext)?;
+            TransmittedNoteCiphertext::from_parts(
+                ephemeral_key,
+                enc_ciphertext_bytes,
+                ct_pq,
+                div_hint,
+                out_ciphertext_bytes,
+            )
+        };
 
         let recipient = recipient
             .as_ref()
             .map(|r| {
-                Address::from_raw_address_bytes(r)
+                RawAddress::from_raw_address_bytes(r)
                     .into_option()
                     .ok_or(ParseError::InvalidRecipient)
             })
@@ -334,6 +356,12 @@ pub enum ParseError {
     InvalidWitness,
     /// An invalid `zip32_derivation` was provided.
     InvalidZip32Derivation,
+    /// `diversifier_hint` must be provided in hybrid-kem mode.
+    #[cfg(feature = "hybrid-kem")]
+    MissingDiversifierHint,
+    /// `ct_pq` must be provided in hybrid-kem mode.
+    #[cfg(feature = "hybrid-kem")]
+    MissingPqCiphertext,
     /// `rho` must be provided whenever `rseed` is provided.
     MissingRho,
     /// The provided `flags` field had unexpected bits set.
@@ -360,6 +388,14 @@ impl fmt::Display for ParseError {
             ParseError::InvalidValueCommitTrapdoor => write!(f, "invalid `rcv`"),
             ParseError::InvalidWitness => write!(f, "invalid `witness`"),
             ParseError::InvalidZip32Derivation => write!(f, "invalid `zip32_derivation`"),
+            #[cfg(feature = "hybrid-kem")]
+            ParseError::MissingDiversifierHint => {
+                write!(f, "`diversifier_hint` must be provided in hybrid-kem mode")
+            }
+            #[cfg(feature = "hybrid-kem")]
+            ParseError::MissingPqCiphertext => {
+                write!(f, "`ct_pq` must be provided in hybrid-kem mode")
+            }
             ParseError::MissingRho => {
                 write!(f, "`rho` must be provided whenever `rseed` is provided")
             }
@@ -370,3 +406,116 @@ impl fmt::Display for ParseError {
 
 #[cfg(feature = "std")]
 impl std::error::Error for ParseError {}
+
+#[cfg(all(test, feature = "hybrid-kem"))]
+mod tests {
+    use super::*;
+    use crate::memo::ZcashMemo;
+
+    /// Helper: constructs minimal valid arguments for `Output::parse` (hybrid-kem mode).
+    /// The cmx, enc_ciphertext, and out_ciphertext are syntactically valid but semantically
+    /// meaningless — sufficient to reach the PQ field validation.
+    fn valid_output_args() -> (
+        Nullifier,
+        [u8; 32],
+        [u8; 32],
+        Vec<u8>,
+        Vec<u8>,
+        [u8; 1088],
+        [u8; 11],
+    ) {
+        use rand::rngs::OsRng;
+        let nf = Nullifier::dummy(&mut OsRng);
+        // Zero is a valid Pallas base field element
+        let cmx_bytes = [0u8; 32];
+        let ephemeral_key = [0u8; 32];
+        let enc_ciphertext = vec![0u8; 580]; // ZcashMemo NoteCiphertextBytes size
+        let out_ciphertext = vec![0u8; 112]; // hybrid out_ciphertext size
+        let ct_pq = [0u8; 1088];
+        let diversifier_hint = [0u8; 11];
+        (
+            nf,
+            cmx_bytes,
+            ephemeral_key,
+            enc_ciphertext,
+            out_ciphertext,
+            ct_pq,
+            diversifier_hint,
+        )
+    }
+
+    #[test]
+    fn output_parse_missing_pq_ciphertext() {
+        let (nf, cmx, epk, enc, out, _ct_pq, div_hint) = valid_output_args();
+        let result = Output::<ZcashMemo>::parse(
+            nf,
+            cmx,
+            epk,
+            enc,
+            out,
+            None, // ct_pq missing
+            Some(div_hint),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        assert!(
+            matches!(result, Err(ParseError::MissingPqCiphertext)),
+            "parse must fail with MissingPqCiphertext when ct_pq is None"
+        );
+    }
+
+    #[test]
+    fn output_parse_missing_diversifier_hint() {
+        let (nf, cmx, epk, enc, out, ct_pq, _div_hint) = valid_output_args();
+        let result = Output::<ZcashMemo>::parse(
+            nf,
+            cmx,
+            epk,
+            enc,
+            out,
+            Some(ct_pq),
+            None, // diversifier_hint missing
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        assert!(
+            matches!(result, Err(ParseError::MissingDiversifierHint)),
+            "parse must fail with MissingDiversifierHint when diversifier_hint is None"
+        );
+    }
+
+    #[test]
+    fn output_parse_succeeds_with_all_pq_fields() {
+        let (nf, cmx, epk, enc, out, ct_pq, div_hint) = valid_output_args();
+        let result = Output::<ZcashMemo>::parse(
+            nf,
+            cmx,
+            epk,
+            enc,
+            out,
+            Some(ct_pq),
+            Some(div_hint),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        assert!(
+            result.is_ok(),
+            "parse must succeed when all PQ fields are provided"
+        );
+    }
+}

@@ -376,17 +376,53 @@ impl<M: MemoSize> OutputInfo<M> {
         mut rng: impl RngCore,
     ) -> (Note, ExtractedNoteCommitment, TransmittedNoteCiphertext<M>) {
         let rho = Rho::from_nf_old(nf_old);
-        let note = Note::new(self.recipient, self.value, rho, &mut rng);
+        #[allow(clippy::clone_on_copy)] // Address is not Copy in hybrid-kem mode
+        let note = Note::new(self.recipient.clone(), self.value, rho, &mut rng);
         let cm_new = note.commitment();
         let cmx = cm_new.into();
 
-        let encryptor = OrchardNoteEncryption::<M>::new(self.ovk.clone(), note, self.memo.clone());
+        let encryptor =
+            OrchardNoteEncryption::<M>::new(self.ovk.clone(), note.clone(), self.memo.clone());
 
-        let encrypted_note = TransmittedNoteCiphertext::from_parts(
-            encryptor.epk().to_bytes().0,
-            encryptor.encrypt_note_plaintext(),
-            encryptor.encrypt_outgoing_plaintext(cv_net, &cmx, &mut rng),
-        );
+        let epk_bytes = encryptor.epk().to_bytes().0;
+        let enc_ciphertext = encryptor.encrypt_note_plaintext();
+        let out_ciphertext = encryptor.encrypt_outgoing_plaintext(cv_net, &cmx, &mut rng);
+
+        #[cfg(feature = "hybrid-kem")]
+        let encrypted_note = {
+            // Deterministic encapsulation produces the same ct_pq as ka_agree_enc did.
+            let esk = note.esk();
+            let ek_pq = self.recipient.ek_pq();
+            let (ct_pq, _) =
+                crate::hybrid_kem::encapsulate_deterministic(&ek_pq.0, &esk.pq_randomness).expect(
+                    "ML-KEM encapsulation must succeed for keys derived from a valid spending key",
+                );
+
+            // Compute ECDH shared secret bytes for the diversifier hint.
+            // This duplicates the ECDH scalar multiplication (also done inside ka_agree_enc),
+            // but is unavoidable — we need the raw ECDH bytes before they enter the hybrid KDF.
+            let ss_ecdh = esk.agree(self.recipient.pk_d());
+            let ss_ecdh_bytes = {
+                use group::{Curve, GroupEncoding};
+                ss_ecdh.inner().to_affine().to_bytes()
+            };
+            let diversifier_hint = crate::hybrid_kem::encrypt_diversifier_hint(
+                &ss_ecdh_bytes,
+                &epk_bytes,
+                self.recipient.diversifier().as_array(),
+            );
+
+            TransmittedNoteCiphertext::from_parts(
+                epk_bytes,
+                enc_ciphertext,
+                ct_pq,
+                diversifier_hint,
+                out_ciphertext,
+            )
+        };
+        #[cfg(not(feature = "hybrid-kem"))]
+        let encrypted_note =
+            TransmittedNoteCiphertext::from_parts(epk_bytes, enc_ciphertext, out_ciphertext);
 
         (note, cmx, encrypted_note)
     }
@@ -404,7 +440,7 @@ impl<M: MemoSize> OutputInfo<M> {
         crate::pczt::Output {
             cmx,
             encrypted_note,
-            recipient: Some(self.recipient),
+            recipient: Some(self.recipient.into_raw()),
             value: Some(self.value),
             rseed: Some(*note.rseed()),
             // TODO: Extract ock from the encryptor and save it so
@@ -1315,7 +1351,7 @@ pub mod testing {
             }
 
             for (addr, value) in self.output_amounts.into_iter() {
-                let scope = fvk.scope_for_address(&addr).unwrap();
+                let scope = fvk.scope_for_address(addr.raw()).unwrap();
                 let ovk = fvk.to_ovk(scope);
 
                 builder
@@ -1355,7 +1391,7 @@ pub mod testing {
             output_amounts in vec(
                 arb_address().prop_flat_map(move |a| {
                     arb_positive_note_value(MAX_NOTE_VALUE / n_outputs as u64)
-                        .prop_map(move |v| (a, v))
+                        .prop_map(move |v| (a.clone(), v))
                 }),
                 n_outputs as usize
             ),
@@ -1374,7 +1410,7 @@ pub mod testing {
                     .ok()
                     .flatten()
                     .expect("we can always construct a correct Merkle path");
-                notes_and_auth_paths.push((*note, path.into()));
+                notes_and_auth_paths.push((note.clone(), path.into()));
             }
 
             ArbitraryBundleInputs {

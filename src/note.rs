@@ -10,12 +10,16 @@ use rand::RngCore;
 use subtle::CtOption;
 
 use crate::{
+    address::RawAddress,
     keys::{EphemeralSecretKey, FullViewingKey, Scope, SpendingKey},
     memo::{MemoSize, ZcashMemo},
     spec::{to_base, to_scalar, NonZeroPallasScalar, PrfExpand},
     value::NoteValue,
     Address,
 };
+
+#[cfg(feature = "hybrid-kem")]
+use crate::keys::PqEncapsulationKey;
 
 #[cfg(not(feature = "unstable-voting-circuits"))]
 pub(crate) mod commitment;
@@ -139,10 +143,10 @@ impl RandomSeed {
 }
 
 /// A discrete amount of funds received by an address.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct Note {
-    /// The recipient of the funds.
-    recipient: Address,
+    /// The recipient of the funds (43-byte on-chain form).
+    recipient: RawAddress,
     /// The value of this note.
     value: NoteValue,
     /// A unique creation ID for this note.
@@ -154,6 +158,12 @@ pub struct Note {
     rho: Rho,
     /// The seed randomness for various note components.
     rseed: RandomSeed,
+    /// The PQ encapsulation key, if available.
+    ///
+    /// This is `Some` when the note was created via [`Note::new`] from a full [`Address`],
+    /// and `None` when reconstructed via [`Note::from_parts`] (e.g. decryption recovery).
+    #[cfg(feature = "hybrid-kem")]
+    ek_pq: Option<PqEncapsulationKey>,
 }
 
 impl PartialEq for Note {
@@ -182,7 +192,7 @@ impl Note {
     ///
     /// [Section 4.19]: https://zips.z.cash/protocol/protocol.pdf#saplingandorchardinband
     pub fn from_parts(
-        recipient: Address,
+        recipient: RawAddress,
         value: NoteValue,
         rho: Rho,
         rseed: RandomSeed,
@@ -192,8 +202,11 @@ impl Note {
             value,
             rho,
             rseed,
+            #[cfg(feature = "hybrid-kem")]
+            ek_pq: None,
         };
-        CtOption::new(note, note.commitment_inner().is_some())
+        let has_commitment = note.commitment_inner().is_some();
+        CtOption::new(note, has_commitment)
     }
 
     /// Generates a new note.
@@ -208,12 +221,22 @@ impl Note {
         rho: Rho,
         mut rng: impl RngCore,
     ) -> Self {
-        loop {
-            let note = Note::from_parts(recipient, value, rho, RandomSeed::random(&mut rng, &rho));
+        #[cfg(feature = "hybrid-kem")]
+        let ek_pq = Some(recipient.ek_pq().clone());
+        let raw = recipient.into_raw();
+
+        #[allow(unused_mut)]
+        let mut note = loop {
+            let note = Note::from_parts(raw, value, rho, RandomSeed::random(&mut rng, &rho));
             if note.is_some().into() {
                 break note.unwrap();
             }
+        };
+        #[cfg(feature = "hybrid-kem")]
+        {
+            note.ek_pq = ek_pq;
         }
+        note
     }
 
     /// Generates a dummy spent note.
@@ -240,9 +263,18 @@ impl Note {
         (sk, fvk, note)
     }
 
-    /// Returns the recipient of this note.
-    pub fn recipient(&self) -> Address {
+    /// Returns the recipient of this note as a [`RawAddress`].
+    pub fn recipient(&self) -> RawAddress {
         self.recipient
+    }
+
+    /// Returns the PQ encapsulation key, if available.
+    ///
+    /// This is `Some` when the note was created via [`Note::new`] from a full [`Address`],
+    /// and `None` when reconstructed via [`Note::from_parts`].
+    #[cfg(feature = "hybrid-kem")]
+    pub fn ek_pq(&self) -> Option<&PqEncapsulationKey> {
+        self.ek_pq.as_ref()
     }
 
     /// Returns the value of this note.
@@ -257,7 +289,25 @@ impl Note {
 
     /// Derives the ephemeral secret key for this note.
     pub(crate) fn esk(&self) -> EphemeralSecretKey {
-        EphemeralSecretKey(self.rseed.esk(&self.rho))
+        EphemeralSecretKey {
+            ecdh: self.rseed.esk(&self.rho),
+            #[cfg(feature = "hybrid-kem")]
+            pq_randomness: {
+                // Bind encapsulation randomness to the recipient's PQ key.
+                // If ek_pq is not available (reconstruction path),
+                // use a zero key — encapsulation won't be performed anyway.
+                let ek_pq = self
+                    .ek_pq
+                    .as_ref()
+                    .map(|ek| ek.0)
+                    .unwrap_or([0u8; crate::hybrid_kem::PQ_EK_SIZE]);
+                crate::hybrid_kem::derive_pq_encaps_randomness(
+                    self.rseed.as_bytes(),
+                    &self.rho.to_bytes(),
+                    &ek_pq,
+                )
+            },
+        }
     }
 
     /// Returns rho of this note.
@@ -315,14 +365,27 @@ pub struct TransmittedNoteCiphertext<M: MemoSize = ZcashMemo> {
     pub epk_bytes: [u8; 32],
     /// The encrypted note ciphertext
     pub enc_ciphertext: M::NoteCiphertextBytes,
+    /// The ML-KEM-768 ciphertext (hybrid mode only).
+    #[cfg(feature = "hybrid-kem")]
+    pub ct_pq: [u8; 1088],
+    /// An ECDH-encrypted hint that allows the recipient to recover the diversifier
+    /// used to derive the per-diversifier PQ keypair.
+    #[cfg(feature = "hybrid-kem")]
+    pub diversifier_hint: [u8; 11],
     /// An encrypted value that allows the holder of the outgoing cipher
     /// key for the note to recover the note plaintext.
+    #[cfg(feature = "hybrid-kem")]
+    pub out_ciphertext: [u8; 112],
+    /// An encrypted value that allows the holder of the outgoing cipher
+    /// key for the note to recover the note plaintext.
+    #[cfg(not(feature = "hybrid-kem"))]
     pub out_ciphertext: [u8; 80],
     _memo: PhantomData<M>,
 }
 
 impl<M: MemoSize> TransmittedNoteCiphertext<M> {
-    /// Constructs a `TransmittedNoteCiphertext` from its parts.
+    /// Constructs a `TransmittedNoteCiphertext` from its parts (classic mode).
+    #[cfg(not(feature = "hybrid-kem"))]
     pub fn from_parts(
         epk_bytes: [u8; 32],
         enc_ciphertext: M::NoteCiphertextBytes,
@@ -335,15 +398,39 @@ impl<M: MemoSize> TransmittedNoteCiphertext<M> {
             _memo: PhantomData,
         }
     }
+
+    /// Constructs a `TransmittedNoteCiphertext` from its parts (hybrid mode).
+    #[cfg(feature = "hybrid-kem")]
+    pub fn from_parts(
+        epk_bytes: [u8; 32],
+        enc_ciphertext: M::NoteCiphertextBytes,
+        ct_pq: [u8; 1088],
+        diversifier_hint: [u8; 11],
+        out_ciphertext: [u8; 112],
+    ) -> Self {
+        Self {
+            epk_bytes,
+            enc_ciphertext,
+            ct_pq,
+            diversifier_hint,
+            out_ciphertext,
+            _memo: PhantomData,
+        }
+    }
 }
 
 impl<M: MemoSize> fmt::Debug for TransmittedNoteCiphertext<M> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("TransmittedNoteCiphertext")
-            .field("epk_bytes", &self.epk_bytes)
+        let mut s = f.debug_struct("TransmittedNoteCiphertext");
+        s.field("epk_bytes", &self.epk_bytes)
             .field("enc_ciphertext", &hex::encode(self.enc_ciphertext.as_ref()))
-            .field("out_ciphertext", &hex::encode(self.out_ciphertext))
-            .finish()
+            .field("out_ciphertext", &hex::encode(self.out_ciphertext));
+        #[cfg(feature = "hybrid-kem")]
+        {
+            s.field("ct_pq", &hex::encode(self.ct_pq));
+            s.field("diversifier_hint", &hex::encode(self.diversifier_hint));
+        }
+        s.finish()
     }
 }
 
@@ -369,15 +456,29 @@ pub mod testing {
     prop_compose! {
         /// Generate an action without authorization data.
         pub fn arb_note(value: NoteValue)(
-            recipient in arb_address(),
+            address in arb_address(),
             rho in arb_nullifier().prop_map(Rho::from_nf_old),
             rseed in arb_rseed(),
         ) -> Note {
-            Note {
-                recipient,
-                value,
-                rho,
-                rseed,
+            #[cfg(feature = "hybrid-kem")]
+            {
+                let ek_pq = Some(address.ek_pq().clone());
+                Note {
+                    recipient: address.into_raw(),
+                    value,
+                    rho,
+                    rseed,
+                    ek_pq,
+                }
+            }
+            #[cfg(not(feature = "hybrid-kem"))]
+            {
+                Note {
+                    recipient: address,
+                    value,
+                    rho,
+                    rseed,
+                }
             }
         }
     }

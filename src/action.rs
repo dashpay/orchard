@@ -194,6 +194,9 @@ pub(crate) mod testing {
 
     use proptest::prelude::*;
 
+    #[cfg(feature = "hybrid-kem")]
+    use zcash_note_encryption::note_bytes::NoteBytesData;
+
     use crate::{
         memo::ZcashMemo,
         note::{
@@ -214,6 +217,11 @@ pub(crate) mod testing {
     /// together with the note and outgoing ciphertexts. No outgoing viewing key
     /// is used, so `out_ciphertext` is encrypted under a random key, as for a
     /// real output sent without an `ovk`.
+    ///
+    /// Classic-only: the hybrid path constructs a stub `TransmittedNoteCiphertext`
+    /// directly (the proptests bypass `Action::from_parts`'s epk validity by
+    /// constructing the `Action` via its struct literal).
+    #[cfg(not(feature = "hybrid-kem"))]
     fn encrypted_note_for(
         note: Note,
         cv_net: &ValueCommitment,
@@ -241,8 +249,17 @@ pub(crate) mod testing {
                 spend_value - output_value,
                 ValueCommitTrapdoor::zero()
             );
+            #[cfg(not(feature = "hybrid-kem"))]
             let encrypted_note =
                 encrypted_note_for(note, &cv_net, &cmx, StdRng::from_seed(rng_seed));
+            #[cfg(feature = "hybrid-kem")]
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 1088],
+                [0u8; 11],
+                [0u8; 112],
+            );
             Action {
                 nf,
                 rk,
@@ -270,8 +287,17 @@ pub(crate) mod testing {
                 ValueCommitTrapdoor::zero()
             );
 
+            #[cfg(not(feature = "hybrid-kem"))]
             let encrypted_note =
                 encrypted_note_for(note, &cv_net, &cmx, StdRng::from_seed(enc_rng_seed));
+            #[cfg(feature = "hybrid-kem")]
+            let encrypted_note = TransmittedNoteCiphertext::from_parts(
+                [0u8; 32],
+                NoteBytesData([0u8; 580]),
+                [0u8; 1088],
+                [0u8; 11],
+                [0u8; 112],
+            );
 
             let rng = StdRng::from_seed(rng_seed);
 
@@ -335,10 +361,19 @@ mod tests {
     ) {
         let nf = Nullifier::from_bytes(&[1u8; 32]).unwrap();
         let cmx = ExtractedNoteCommitment::from_bytes(&[2u8; 32]).unwrap();
+        #[cfg(not(feature = "hybrid-kem"))]
         let encrypted_note = TransmittedNoteCiphertext::from_parts(
             pallas::Point::generator().to_bytes(),
             NoteBytesData([4u8; 580]),
             [5u8; 80],
+        );
+        #[cfg(feature = "hybrid-kem")]
+        let encrypted_note = TransmittedNoteCiphertext::from_parts(
+            pallas::Point::generator().to_bytes(),
+            NoteBytesData([4u8; 580]),
+            [5u8; 1088],
+            [6u8; 11],
+            [7u8; 112],
         );
         let cv_net = ValueCommitment::derive(ValueSum::from_raw(42), ValueCommitTrapdoor::zero());
         (nf, cmx, encrypted_note, cv_net)
