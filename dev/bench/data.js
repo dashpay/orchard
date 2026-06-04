@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1779639084631,
+  "lastUpdate": 1780551814829,
   "repoUrl": "https://github.com/dashpay/orchard",
   "entries": {
     "Orchard Benchmarks": [
@@ -539,6 +539,186 @@ window.BENCHMARK_DATA = {
             "name": "default_address",
             "value": 521674,
             "range": "± 714",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "quantum@dash.org",
+            "name": "QuantumExplorer",
+            "username": "QuantumExplorer"
+          },
+          "committer": {
+            "email": "quantum@dash.org",
+            "name": "Quantum Explorer",
+            "username": "QuantumExplorer"
+          },
+          "distinct": true,
+          "id": "f05557390a5843bc4eb04c66d8140bc9ef0fe9b7",
+          "message": "docs: publish Dash Orchard book to GitHub Pages (#5)\n\nUpdate book.toml with Dash authorship and title. Modernize the book\ndeployment workflow to use the official GitHub Pages actions\n(upload-pages-artifact + deploy-pages) instead of the deprecated\npeaceiris/actions-gh-pages@v3. This requires enabling GitHub Pages\nwith \"GitHub Actions\" as the source in the repository settings.\n\nCo-authored-by: Claude Opus 4.6 <noreply@anthropic.com>",
+          "timestamp": "2026-06-03T19:34:28+02:00",
+          "tree_id": "7ebb98a164e88e1a2e5c15aefbc209661eba2adf",
+          "url": "https://github.com/dashpay/orchard/commit/f05557390a5843bc4eb04c66d8140bc9ef0fe9b7"
+        },
+        "date": 1780551814470,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "proving/bundle/1",
+            "value": 2763503254,
+            "range": "± 22559914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/2",
+            "value": 2726520792,
+            "range": "± 13784924",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/3",
+            "value": 3893303692,
+            "range": "± 20137922",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/4",
+            "value": 5103009375,
+            "range": "± 45674194",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/1",
+            "value": 22246131,
+            "range": "± 157113",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/2",
+            "value": 22328573,
+            "range": "± 155888",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/3",
+            "value": 25598328,
+            "range": "± 216226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/4",
+            "value": 29115514,
+            "range": "± 320691",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/valid",
+            "value": 1582024,
+            "range": "± 8787",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/invalid",
+            "value": 134180,
+            "range": "± 213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/compact-valid",
+            "value": 1579284,
+            "range": "± 7029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compact-note-decryption/invalid",
+            "value": 1418940416,
+            "range": "± 1476835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/10",
+            "value": 16707843,
+            "range": "± 40414",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/10",
+            "value": 2287438,
+            "range": "± 4928",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/10",
+            "value": 16680151,
+            "range": "± 78630",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/10",
+            "value": 2246686,
+            "range": "± 7479",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/50",
+            "value": 83511563,
+            "range": "± 184235",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/50",
+            "value": 11377640,
+            "range": "± 16000",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/50",
+            "value": 83358265,
+            "range": "± 89185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/50",
+            "value": 11172640,
+            "range": "± 167201",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/100",
+            "value": 166916347,
+            "range": "± 1140786",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/100",
+            "value": 22746685,
+            "range": "± 388279",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/100",
+            "value": 166698913,
+            "range": "± 318687",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/100",
+            "value": 22335761,
+            "range": "± 1221635",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "derive_fvk",
+            "value": 485267,
+            "range": "± 930",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "default_address",
+            "value": 521865,
+            "range": "± 8273",
             "unit": "ns/iter"
           }
         ]
