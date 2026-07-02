@@ -16,6 +16,13 @@ pub const COMPACT_NOTE_SIZE: usize = 52;
 /// The AEAD tag size used by ChaCha20-Poly1305.
 const AEAD_TAG_SIZE: usize = 16;
 
+/// The largest supported memo size (the Zcash 512-byte memo).
+///
+/// Note encryption assembles plaintexts in a stack buffer of
+/// `COMPACT_NOTE_SIZE + MAX_MEMO_SIZE` bytes, so [`MemoSize`] implementations
+/// with larger memos are rejected at compile time by [`MemoSize::SIZE_CHECK`].
+pub const MAX_MEMO_SIZE: usize = 512;
+
 /// Trait defining memo-dependent sizes for the Orchard protocol.
 ///
 /// Implementations of this trait specify the memo type and the corresponding
@@ -53,6 +60,10 @@ pub trait MemoSize: Clone + Debug + 'static {
     /// satisfy the size relationships documented on this trait fails to
     /// compile instead of panicking at runtime.
     const SIZE_CHECK: () = {
+        assert!(
+            Self::MEMO_SIZE <= MAX_MEMO_SIZE,
+            "MemoSize::MEMO_SIZE must not exceed MAX_MEMO_SIZE"
+        );
         assert!(
             core::mem::size_of::<Self::Memo>() == Self::MEMO_SIZE,
             "MemoSize::Memo must be a byte array of MEMO_SIZE bytes"
