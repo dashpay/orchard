@@ -26,17 +26,47 @@ const AEAD_TAG_SIZE: usize = 16;
 ///
 /// | Field | Formula |
 /// |-------|---------|
-/// | `NotePlaintextBytes` | `COMPACT_NOTE_SIZE + memo_len` |
-/// | `NoteCiphertextBytes` | `COMPACT_NOTE_SIZE + memo_len + 16` |
+/// | `Memo` | `[u8; MEMO_SIZE]` |
+/// | `NotePlaintextBytes` | `COMPACT_NOTE_SIZE + MEMO_SIZE` |
+/// | `NoteCiphertextBytes` | `COMPACT_NOTE_SIZE + MEMO_SIZE + AEAD_TAG_SIZE` |
+///
+/// These relationships are enforced at compile time via [`Self::SIZE_CHECK`].
 pub trait MemoSize: Clone + Debug + 'static {
+    /// The memo length in bytes (e.g. 512 for Zcash, 36 for Dash).
+    const MEMO_SIZE: usize;
+
     /// The memo bytes type (e.g., `[u8; 512]` for Zcash, `[u8; 36]` for Dash).
     type Memo: AsRef<[u8]> + Clone + Debug + for<'a> TryFrom<&'a [u8]>;
 
-    /// The note plaintext bytes type (`COMPACT_NOTE_SIZE + memo_len`).
+    /// The note plaintext bytes type (`COMPACT_NOTE_SIZE + MEMO_SIZE`).
     type NotePlaintextBytes: NoteBytes;
 
-    /// The note ciphertext bytes type (`COMPACT_NOTE_SIZE + memo_len + AEAD_TAG_SIZE`).
+    /// The note ciphertext bytes type (`COMPACT_NOTE_SIZE + MEMO_SIZE + AEAD_TAG_SIZE`).
     type NoteCiphertextBytes: NoteBytes;
+
+    /// Compile-time validation that the associated types agree with
+    /// [`Self::MEMO_SIZE`].
+    ///
+    /// This constant is referenced by the note encryption and transaction
+    /// digest code paths, forcing its evaluation when those paths are
+    /// monomorphized: an implementation whose associated types do not
+    /// satisfy the size relationships documented on this trait fails to
+    /// compile instead of panicking at runtime.
+    const SIZE_CHECK: () = {
+        assert!(
+            core::mem::size_of::<Self::Memo>() == Self::MEMO_SIZE,
+            "MemoSize::Memo must be a byte array of MEMO_SIZE bytes"
+        );
+        assert!(
+            core::mem::size_of::<Self::NotePlaintextBytes>() == COMPACT_NOTE_SIZE + Self::MEMO_SIZE,
+            "MemoSize::NotePlaintextBytes must hold COMPACT_NOTE_SIZE + MEMO_SIZE bytes"
+        );
+        assert!(
+            core::mem::size_of::<Self::NoteCiphertextBytes>()
+                == COMPACT_NOTE_SIZE + Self::MEMO_SIZE + AEAD_TAG_SIZE,
+            "MemoSize::NoteCiphertextBytes must hold COMPACT_NOTE_SIZE + MEMO_SIZE + AEAD_TAG_SIZE bytes"
+        );
+    };
 
     /// Returns a zero-filled memo.
     fn empty_memo() -> Self::Memo;
@@ -60,6 +90,8 @@ pub trait MemoSize: Clone + Debug + 'static {
 pub struct ZcashMemo;
 
 impl MemoSize for ZcashMemo {
+    const MEMO_SIZE: usize = 512;
+
     type Memo = [u8; 512];
     type NotePlaintextBytes = zcash_note_encryption::note_bytes::NoteBytesData<564>;
     type NoteCiphertextBytes = zcash_note_encryption::note_bytes::NoteBytesData<580>;
@@ -86,6 +118,8 @@ impl MemoSize for ZcashMemo {
 pub struct DashMemo;
 
 impl MemoSize for DashMemo {
+    const MEMO_SIZE: usize = 36;
+
     type Memo = [u8; 36];
     type NotePlaintextBytes = zcash_note_encryption::note_bytes::NoteBytesData<88>;
     type NoteCiphertextBytes = zcash_note_encryption::note_bytes::NoteBytesData<104>;
@@ -96,5 +130,21 @@ impl MemoSize for DashMemo {
 
     fn memo_from_bytes(bytes: &[u8]) -> Option<Self::Memo> {
         bytes.try_into().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DashMemo, MemoSize, ZcashMemo};
+
+    #[test]
+    #[allow(clippy::let_unit_value)]
+    fn size_checks_hold_for_provided_impls() {
+        // Referencing SIZE_CHECK forces its compile-time evaluation; a
+        // mis-sized implementation would fail this test by failing to build.
+        let _ = ZcashMemo::SIZE_CHECK;
+        let _ = DashMemo::SIZE_CHECK;
+        assert_eq!(ZcashMemo::MEMO_SIZE, 512);
+        assert_eq!(DashMemo::MEMO_SIZE, 36);
     }
 }

@@ -209,6 +209,10 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
     }
 
     fn note_plaintext_bytes(note: &Self::Note, memo: &Self::Memo) -> Self::NotePlaintextBytes {
+        // Rejects mis-sized `MemoSize` implementations at compile time.
+        #[allow(clippy::let_unit_value)]
+        let _ = M::SIZE_CHECK;
+
         let mut np = [0u8; COMPACT_NOTE_SIZE];
         np[0] = 0x02;
         np[1..12].copy_from_slice(note.recipient().diversifier().as_array());
@@ -275,6 +279,10 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         &self,
         plaintext: &Self::NotePlaintextBytes,
     ) -> Option<(Self::CompactNotePlaintextBytes, Self::Memo)> {
+        // Rejects mis-sized `MemoSize` implementations at compile time.
+        #[allow(clippy::let_unit_value)]
+        let _ = M::SIZE_CHECK;
+
         let bytes = plaintext.as_ref();
         if bytes.len() < COMPACT_NOTE_SIZE {
             return None;
