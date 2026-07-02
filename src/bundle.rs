@@ -450,12 +450,12 @@ impl Authorization for EffectsOnly {
     type SpendAuth = ();
 }
 
-impl<V> Bundle<EffectsOnly, V> {
+impl<V, M: MemoSize> Bundle<EffectsOnly, V, M> {
     /// Constructs an effects-only `Bundle` from its constituent parts.
     ///
     /// An effects-only bundle carries no proof, so there is no proof size to validate.
     pub fn from_parts(
-        actions: NonEmpty<Action<<EffectsOnly as Authorization>::SpendAuth>>,
+        actions: NonEmpty<Action<<EffectsOnly as Authorization>::SpendAuth, M>>,
         flags: Flags,
         value_balance: V,
         anchor: Anchor,
