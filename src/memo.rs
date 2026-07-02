@@ -14,7 +14,13 @@ use zcash_note_encryption::note_bytes::NoteBytes;
 pub const COMPACT_NOTE_SIZE: usize = 52;
 
 /// The AEAD tag size used by ChaCha20-Poly1305.
-const AEAD_TAG_SIZE: usize = 16;
+///
+/// Re-exported from [`zcash_note_encryption`] so the crate has a single
+/// source of truth for this width, which determines where the memo
+/// ciphertext ends in [ZIP-244]-style transaction digests.
+///
+/// [ZIP-244]: https://zips.z.cash/zip-0244
+pub use zcash_note_encryption::AEAD_TAG_SIZE;
 
 /// The largest supported memo size (the Zcash 512-byte memo).
 ///

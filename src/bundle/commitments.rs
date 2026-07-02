@@ -3,7 +3,7 @@
 use blake2b_simd::{Hash as Blake2bHash, Params, State};
 
 use crate::bundle::{Authorization, Authorized, Bundle};
-use crate::memo::{MemoSize, COMPACT_NOTE_SIZE};
+use crate::memo::{MemoSize, AEAD_TAG_SIZE, COMPACT_NOTE_SIZE};
 
 const ZCASH_ORCHARD_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrchardHash";
 const ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION: &[u8; 16] = b"ZTxIdOrcActCHash";
@@ -17,12 +17,16 @@ fn hasher(personal: &[u8; 16]) -> State {
 
 /// Write disjoint parts of each Orchard shielded action as 3 separate hashes
 /// as defined in [ZIP-244: Transaction Identifier Non-Malleability][zip244]:
-/// * \[(nullifier, cmx, ephemeral_key, enc_ciphertext\[..52\])*\] personalized
-///   with ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION
-/// * \[enc_ciphertext\[52..564\]*\] (memo ciphertexts) personalized
-///   with ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION
-/// * \[(cv, rk, enc_ciphertext\[564..\], out_ciphertext)*\] personalized
-///   with ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION
+/// * \[(nullifier, cmx, ephemeral_key, enc_ciphertext\[..COMPACT_NOTE_SIZE\])*\]
+///   personalized with ZCASH_ORCHARD_ACTIONS_COMPACT_HASH_PERSONALIZATION
+/// * \[enc_ciphertext\[COMPACT_NOTE_SIZE..len - AEAD_TAG_SIZE\]*\] (memo
+///   ciphertexts) personalized with ZCASH_ORCHARD_ACTIONS_MEMOS_HASH_PERSONALIZATION
+/// * \[(cv, rk, enc_ciphertext\[len - AEAD_TAG_SIZE..\], out_ciphertext)*\]
+///   personalized with ZCASH_ORCHARD_ACTIONS_NONCOMPACT_HASH_PERSONALIZATION
+///
+/// where `len` is the memo-size-dependent ciphertext length: 580 for Zcash's
+/// 512-byte memos (giving ZIP-244's original 52/564 offsets) and 104 for
+/// Dash's 36-byte memos.
 ///
 /// Then, hash these together along with (flags, value_balance_orchard, anchor_orchard),
 /// personalized with ZCASH_ORCHARD_ACTIONS_HASH_PERSONALIZATION
@@ -44,7 +48,7 @@ pub(crate) fn hash_bundle_txid_data<A: Authorization, V: Copy + Into<i64>, M: Me
 
     for action in bundle.actions().iter() {
         let enc = action.encrypted_note().enc_ciphertext.as_ref();
-        let aead_tag_start = enc.len() - 16;
+        let aead_tag_start = enc.len() - AEAD_TAG_SIZE;
 
         ch.update(&action.nullifier().to_bytes());
         ch.update(&action.cmx().to_bytes());
