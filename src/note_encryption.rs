@@ -18,7 +18,7 @@ use crate::{
         DiversifiedTransmissionKey, Diversifier, EphemeralPublicKey, EphemeralSecretKey,
         OutgoingViewingKey, PreparedEphemeralPublicKey, PreparedIncomingViewingKey, SharedSecret,
     },
-    memo::{MemoSize, ZcashMemo, COMPACT_NOTE_SIZE},
+    memo::{MemoSize, ZcashMemo, COMPACT_NOTE_SIZE, MAX_MEMO_SIZE},
     note::{ExtractedNoteCommitment, Nullifier, RandomSeed, Rho},
     value::{NoteValue, ValueCommitment},
     Address, Note,
@@ -202,21 +202,37 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
     }
 
     fn note_plaintext_bytes(note: &Self::Note, memo: &Self::Memo) -> Self::NotePlaintextBytes {
-        // Rejects mis-sized `MemoSize` implementations at compile time.
+        // Rejects mis-sized `MemoSize` implementations at compile time, and
+        // guarantees `MEMO_SIZE <= MAX_MEMO_SIZE` so the buffer below is
+        // large enough for any `M` that compiles.
         #[allow(clippy::let_unit_value)]
         let _ = M::SIZE_CHECK;
 
-        let mut np = [0u8; COMPACT_NOTE_SIZE];
-        np[0] = 0x02;
-        np[1..12].copy_from_slice(note.recipient().diversifier().as_array());
-        np[12..20].copy_from_slice(&note.value().to_bytes());
-        np[20..COMPACT_NOTE_SIZE].copy_from_slice(note.rseed().as_bytes());
+        // Assemble the plaintext in a max-size stack buffer: it carries
+        // secret note data (diversifier, value, rseed, memo), which must not
+        // end up in a heap allocation that is freed without zeroization.
+        let mut buf = [0u8; COMPACT_NOTE_SIZE + MAX_MEMO_SIZE];
+        buf[0] = 0x02;
+        buf[1..12].copy_from_slice(note.recipient().diversifier().as_array());
+        buf[12..20].copy_from_slice(&note.value().to_bytes());
+        buf[20..COMPACT_NOTE_SIZE].copy_from_slice(note.rseed().as_bytes());
 
-        let mut buf = alloc::vec![0u8; COMPACT_NOTE_SIZE + memo.as_ref().len()];
-        buf[..COMPACT_NOTE_SIZE].copy_from_slice(&np);
-        buf[COMPACT_NOTE_SIZE..].copy_from_slice(memo.as_ref());
+        // SIZE_CHECK constrains the size of the `Memo` type, but not what a
+        // custom `AsRef` implementation returns; check it explicitly so a
+        // mismatch fails here rather than as an opaque slice-index panic.
+        let memo_bytes = memo.as_ref();
+        assert_eq!(
+            memo_bytes.len(),
+            M::MEMO_SIZE,
+            "Memo::as_ref() must return MEMO_SIZE bytes"
+        );
 
-        Self::NotePlaintextBytes::from_slice(&buf).expect("memo size is consistent with M")
+        // In-bounds for any `M` that compiles: SIZE_CHECK bounds MEMO_SIZE by
+        // MAX_MEMO_SIZE.
+        let len = COMPACT_NOTE_SIZE + M::MEMO_SIZE;
+        buf[COMPACT_NOTE_SIZE..len].copy_from_slice(memo_bytes);
+
+        Self::NotePlaintextBytes::from_slice(&buf[..len]).expect("memo size is consistent with M")
     }
 
     fn derive_ock(
