@@ -217,8 +217,19 @@ impl<M: MemoSize> Domain for OrchardDomain<M> {
         buf[12..20].copy_from_slice(&note.value().to_bytes());
         buf[20..COMPACT_NOTE_SIZE].copy_from_slice(note.rseed().as_bytes());
 
+        // SIZE_CHECK constrains the size of the `Memo` type, but not what a
+        // custom `AsRef` implementation returns; check it explicitly so a
+        // mismatch fails here rather than as an opaque slice-index panic.
         let memo_bytes = memo.as_ref();
-        let len = COMPACT_NOTE_SIZE + memo_bytes.len();
+        assert_eq!(
+            memo_bytes.len(),
+            M::MEMO_SIZE,
+            "Memo::as_ref() must return MEMO_SIZE bytes"
+        );
+
+        // In-bounds for any `M` that compiles: SIZE_CHECK bounds MEMO_SIZE by
+        // MAX_MEMO_SIZE.
+        let len = COMPACT_NOTE_SIZE + M::MEMO_SIZE;
         buf[COMPACT_NOTE_SIZE..len].copy_from_slice(memo_bytes);
 
         Self::NotePlaintextBytes::from_slice(&buf[..len]).expect("memo size is consistent with M")
