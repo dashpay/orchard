@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780551814829,
+  "lastUpdate": 1782974048142,
   "repoUrl": "https://github.com/dashpay/orchard",
   "entries": {
     "Orchard Benchmarks": [
@@ -719,6 +719,186 @@ window.BENCHMARK_DATA = {
             "name": "default_address",
             "value": 521865,
             "range": "± 8273",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "quantum@dash.org",
+            "name": "QuantumExplorer",
+            "username": "QuantumExplorer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "81ca424e4d13dd1fa61fda24fdd1b3a03e4c01ab",
+          "message": "fix: make PCZT trial decryption generic over MemoSize (#6)\n\nOrchardDomain::for_pczt_action and the ShieldedOutput impl for\npczt::Action were pinned to ZcashMemo, so a pczt::Bundle<DashMemo>\nbuilt via Builder::<DashMemo>::build_for_pczt had no supported\ntrial-decryption path: a Signer could not verify the outputs it was\nasked to authorize, and orphan rules prevent downstream crates from\nadding the impl themselves.\n\nGeneralize both over M: MemoSize, delegate for_pczt_action to\nfor_nullifier instead of duplicating its body, and add a regression\ntest that trial-decrypts a DashMemo PCZT output end-to-end.\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-02T13:22:27+07:00",
+          "tree_id": "99a3e8648a3a342124f1668f4cf4e864eba92531",
+          "url": "https://github.com/dashpay/orchard/commit/81ca424e4d13dd1fa61fda24fdd1b3a03e4c01ab"
+        },
+        "date": 1782974046981,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "proving/bundle/1",
+            "value": 2641668469,
+            "range": "± 12755267",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/2",
+            "value": 2633334023,
+            "range": "± 9742099",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/3",
+            "value": 3789915446,
+            "range": "± 12241299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/4",
+            "value": 4930922584,
+            "range": "± 5588863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/1",
+            "value": 20766671,
+            "range": "± 84518",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/2",
+            "value": 20987551,
+            "range": "± 212572",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/3",
+            "value": 23972994,
+            "range": "± 141405",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/4",
+            "value": 26972603,
+            "range": "± 129135",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/valid",
+            "value": 1303426,
+            "range": "± 127200",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/invalid",
+            "value": 108556,
+            "range": "± 147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/compact-valid",
+            "value": 1300871,
+            "range": "± 14235",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compact-note-decryption/invalid",
+            "value": 1149201379,
+            "range": "± 2831621",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/10",
+            "value": 13759644,
+            "range": "± 18138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/10",
+            "value": 1870744,
+            "range": "± 20076",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/10",
+            "value": 13742248,
+            "range": "± 20705",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/10",
+            "value": 1827615,
+            "range": "± 4671",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/50",
+            "value": 68783538,
+            "range": "± 84159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/50",
+            "value": 9197157,
+            "range": "± 34578",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/50",
+            "value": 68700206,
+            "range": "± 126967",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/50",
+            "value": 9051373,
+            "range": "± 21542",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/100",
+            "value": 137554855,
+            "range": "± 588667",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/100",
+            "value": 18345020,
+            "range": "± 227298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/100",
+            "value": 137327929,
+            "range": "± 210916",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/100",
+            "value": 18053009,
+            "range": "± 25417",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "derive_fvk",
+            "value": 396436,
+            "range": "± 4427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "default_address",
+            "value": 429511,
+            "range": "± 1080",
             "unit": "ns/iter"
           }
         ]
