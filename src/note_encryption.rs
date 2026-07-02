@@ -136,17 +136,10 @@ impl<M: MemoSize> OrchardDomain<M> {
             _memo: PhantomData,
         }
     }
-}
 
-impl OrchardDomain<ZcashMemo> {
     /// Constructs a domain that can be used to trial-decrypt a PCZT action's output note.
-    pub fn for_pczt_action(act: &crate::pczt::Action) -> Self {
-        Self {
-            base: OrchardDomainBase {
-                rho: Rho::from_nf_old(act.spend().nullifier),
-            },
-            _memo: PhantomData,
-        }
+    pub fn for_pczt_action(act: &crate::pczt::Action<M>) -> Self {
+        Self::for_nullifier(act.spend().nullifier)
     }
 }
 
@@ -334,7 +327,7 @@ impl<T, M: MemoSize> ShieldedOutput<OrchardDomain<M>> for Action<T, M> {
     }
 }
 
-impl ShieldedOutput<OrchardDomain<ZcashMemo>> for crate::pczt::Action {
+impl<M: MemoSize> ShieldedOutput<OrchardDomain<M>> for crate::pczt::Action<M> {
     fn ephemeral_key(&self) -> EphemeralKeyBytes {
         EphemeralKeyBytes(self.output().encrypted_note().epk_bytes)
     }
@@ -343,7 +336,7 @@ impl ShieldedOutput<OrchardDomain<ZcashMemo>> for crate::pczt::Action {
         self.output().cmx()
     }
 
-    fn enc_ciphertext(&self) -> Option<&<ZcashMemo as MemoSize>::NoteCiphertextBytes> {
+    fn enc_ciphertext(&self) -> Option<&M::NoteCiphertextBytes> {
         Some(&self.output().encrypted_note().enc_ciphertext)
     }
 
@@ -619,5 +612,48 @@ mod tests {
                 &tv.c_out[..]
             );
         }
+    }
+
+    #[test]
+    fn pczt_trial_decryption_is_memo_size_generic() {
+        use crate::{
+            builder::{Builder, BundleType},
+            constants::MERKLE_DEPTH_ORCHARD,
+            keys::{FullViewingKey, Scope, SpendingKey},
+            memo::DashMemo,
+            tree::EMPTY_ROOTS,
+        };
+
+        let mut rng = OsRng;
+        let sk = SpendingKey::random(&mut rng);
+        let fvk = FullViewingKey::from(&sk);
+        let recipient = fvk.address_at(0u32, Scope::External);
+
+        // Run the Creator and Constructor roles with a non-Zcash memo size.
+        let mut builder: Builder<DashMemo> = Builder::new(
+            BundleType::DEFAULT,
+            EMPTY_ROOTS[MERKLE_DEPTH_ORCHARD].into(),
+        );
+        let memo = [42u8; 36];
+        builder
+            .add_output(None, recipient, NoteValue::from_raw(5000), memo)
+            .unwrap();
+        let pczt_bundle = builder.build_for_pczt(&mut rng).unwrap().0;
+
+        // A Signer role must be able to decrypt the output it is being asked
+        // to authorize, without knowing which action carries the real note.
+        let ivk = PreparedIncomingViewingKey::new(&fvk.to_ivk(Scope::External));
+        let (note, address, decrypted_memo) = pczt_bundle
+            .actions()
+            .iter()
+            .find_map(|action| {
+                let domain = OrchardDomain::for_pczt_action(action);
+                try_note_decryption(&domain, &ivk, action)
+            })
+            .expect("recipient can trial-decrypt their output");
+
+        assert_eq!(note.value(), NoteValue::from_raw(5000));
+        assert_eq!(address, recipient);
+        assert_eq!(decrypted_memo, memo);
     }
 }
