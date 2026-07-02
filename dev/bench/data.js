@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782984006249,
+  "lastUpdate": 1782996973749,
   "repoUrl": "https://github.com/dashpay/orchard",
   "entries": {
     "Orchard Benchmarks": [
@@ -1079,6 +1079,186 @@ window.BENCHMARK_DATA = {
             "name": "default_address",
             "value": 488714,
             "range": "± 1101",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "quantum@dash.org",
+            "name": "QuantumExplorer",
+            "username": "QuantumExplorer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "eda13099871ab07f248a31f4797c5ad5402b0849",
+          "message": "perf: build note plaintexts in a stack buffer instead of a heap Vec (#8)\n\n* perf: build note plaintexts in a stack buffer instead of a heap Vec\n\nnote_plaintext_bytes assembled the secret note plaintext (diversifier,\nvalue, rseed, memo) in a 52-byte stack array, copied it into a\ntransient alloc::vec! buffer, and copied that again via from_slice --\none heap allocation plus two redundant copies per encrypted output on\na previously allocation-free path, with the Vec freed without\nzeroization leaving the only heap copy of note plaintext in the\nencryption path.\n\nBuild the plaintext directly in a single max-size stack buffer\n(COMPACT_NOTE_SIZE + MAX_MEMO_SIZE = 564 bytes) and convert once with\nfrom_slice(&buf[..len]). A new MAX_MEMO_SIZE bound in SIZE_CHECK\nguarantees at compile time that the buffer is large enough for any\nMemoSize implementation that compiles.\n\nOutput is byte-for-byte unchanged, as pinned by the note encryption\ntest vectors and the golden vectors added in #7.\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n* fix: validate Memo::as_ref() length before the plaintext buffer copy\n\nSIZE_CHECK constrains the size of the Memo type, but a custom AsRef\nimplementation could still return a slice of a different length,\nsurfacing as an opaque slice-index panic in the buffer copy. Assert\nthe slice length explicitly and derive the plaintext length from\nM::MEMO_SIZE, which SIZE_CHECK already bounds by MAX_MEMO_SIZE.\n\nCo-Authored-By: Claude Fable 5 <noreply@anthropic.com>\n\n---------\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-02T19:44:14+07:00",
+          "tree_id": "d30a09e32b3d5cfca38678f5ee43d510849599bc",
+          "url": "https://github.com/dashpay/orchard/commit/eda13099871ab07f248a31f4797c5ad5402b0849"
+        },
+        "date": 1782996973372,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "proving/bundle/1",
+            "value": 2609420572,
+            "range": "± 27756111",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/2",
+            "value": 2581581036,
+            "range": "± 10313205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/3",
+            "value": 3718907921,
+            "range": "± 23587683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/4",
+            "value": 4833877806,
+            "range": "± 21387224",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/1",
+            "value": 20513064,
+            "range": "± 251689",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/2",
+            "value": 20441267,
+            "range": "± 153223",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/3",
+            "value": 23804150,
+            "range": "± 187189",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/4",
+            "value": 26857649,
+            "range": "± 360439",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/valid",
+            "value": 1480598,
+            "range": "± 5827",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/invalid",
+            "value": 124465,
+            "range": "± 168",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/compact-valid",
+            "value": 1477752,
+            "range": "± 11623",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compact-note-decryption/invalid",
+            "value": 1318922325,
+            "range": "± 820737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/10",
+            "value": 15625420,
+            "range": "± 16927",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/10",
+            "value": 2103875,
+            "range": "± 6249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/10",
+            "value": 15621637,
+            "range": "± 39671",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/10",
+            "value": 2069551,
+            "range": "± 3367",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/50",
+            "value": 78132249,
+            "range": "± 136874",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/50",
+            "value": 10469874,
+            "range": "± 47741",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/50",
+            "value": 78076776,
+            "range": "± 97905",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/50",
+            "value": 10297083,
+            "range": "± 10915",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/100",
+            "value": 156175594,
+            "range": "± 459324",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/100",
+            "value": 20933188,
+            "range": "± 66043",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/100",
+            "value": 156076526,
+            "range": "± 244026",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/100",
+            "value": 20569136,
+            "range": "± 25438",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "derive_fvk",
+            "value": 453121,
+            "range": "± 7404",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "default_address",
+            "value": 488514,
+            "range": "± 865",
             "unit": "ns/iter"
           }
         ]
