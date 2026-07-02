@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782974048142,
+  "lastUpdate": 1782984006249,
   "repoUrl": "https://github.com/dashpay/orchard",
   "entries": {
     "Orchard Benchmarks": [
@@ -899,6 +899,186 @@ window.BENCHMARK_DATA = {
             "name": "default_address",
             "value": 429511,
             "range": "± 1080",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "quantum@dash.org",
+            "name": "QuantumExplorer",
+            "username": "QuantumExplorer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6d3bc20de3b96d7178a441aa37178d595948dfe8",
+          "message": "feat: enforce MemoSize invariants at compile time and add DashMemo coverage (#7)\n\nThe MemoSize trait documented but did not enforce the relationships\nbetween MEMO_SIZE and its associated byte types, so a mis-sized\nthird-party implementation compiled cleanly and then panicked at\nruntime -- during note encryption and, worse, inside the ZIP-244-style\ntxid digest where unguarded `enc.len() - 16` slicing could underflow.\n\nAdd a MEMO_SIZE associated const and a SIZE_CHECK const assertion that\nis referenced by the encryption, decryption, and txid-hashing paths,\nturning a mis-sized implementation into a monomorphization-time compile\nerror.\n\nDashMemo also had zero test coverage anywhere in the crate. Add:\n\n- tests/dash_memo.rs: a bundle round-trip exercising full trial\n  decryption, compact decryption, OVK output recovery, and txid\n  commitment computation with 36-byte memos through the public API,\n  plus a deterministic golden vector pinning the 104-byte Dash note\n  ciphertext wire format\n- txid digest golden vectors for both ZcashMemo and DashMemo bundles,\n  built entirely from fixed inputs\n- a compile-time regression test that the size checks hold for both\n  provided implementations\n\nAlso generalize `Bundle<EffectsOnly, V>::from_parts` over MemoSize; it\nwas pinned to the ZcashMemo default, making effects-only bundles\nunconstructible for other memo sizes.\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-02T16:08:01+07:00",
+          "tree_id": "1fad246ffae06f37aa251e0e3e96884948fdeeac",
+          "url": "https://github.com/dashpay/orchard/commit/6d3bc20de3b96d7178a441aa37178d595948dfe8"
+        },
+        "date": 1782984005179,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "proving/bundle/1",
+            "value": 2610773544,
+            "range": "± 147052737",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/2",
+            "value": 2581791354,
+            "range": "± 7359512",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/3",
+            "value": 3691966952,
+            "range": "± 17921427",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/4",
+            "value": 4808035621,
+            "range": "± 27243929",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/1",
+            "value": 20544844,
+            "range": "± 168258",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/2",
+            "value": 20483173,
+            "range": "± 137931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/3",
+            "value": 23608267,
+            "range": "± 154415",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/4",
+            "value": 26900255,
+            "range": "± 209566",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/valid",
+            "value": 1482841,
+            "range": "± 11186",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/invalid",
+            "value": 124924,
+            "range": "± 316",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/compact-valid",
+            "value": 1479918,
+            "range": "± 16127",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compact-note-decryption/invalid",
+            "value": 1319869209,
+            "range": "± 1414246",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/10",
+            "value": 15681650,
+            "range": "± 205276",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/10",
+            "value": 2114401,
+            "range": "± 2580",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/10",
+            "value": 15630446,
+            "range": "± 77123",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/10",
+            "value": 2079772,
+            "range": "± 17287",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/50",
+            "value": 78229450,
+            "range": "± 101679",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/50",
+            "value": 10521391,
+            "range": "± 60078",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/50",
+            "value": 78242008,
+            "range": "± 221800",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/50",
+            "value": 10346081,
+            "range": "± 17138",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/100",
+            "value": 156755039,
+            "range": "± 490283",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/100",
+            "value": 21021526,
+            "range": "± 42320",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/100",
+            "value": 156384470,
+            "range": "± 191453",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/100",
+            "value": 20668819,
+            "range": "± 20183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "derive_fvk",
+            "value": 453962,
+            "range": "± 2672",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "default_address",
+            "value": 488714,
+            "range": "± 1101",
             "unit": "ns/iter"
           }
         ]
