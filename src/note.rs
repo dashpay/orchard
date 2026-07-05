@@ -9,9 +9,11 @@ use pasta_curves::pallas;
 use rand::RngCore;
 use subtle::CtOption;
 
+use zcash_note_encryption::note_bytes::{NoteBytes, NoteBytesData};
+
 use crate::{
     keys::{EphemeralSecretKey, FullViewingKey, Scope, SpendingKey},
-    memo::{MemoSize, ZcashMemo},
+    memo::{MemoSize, ZcashMemo, COMPACT_NOTE_SIZE},
     spec::{to_base, to_scalar, NonZeroPallasScalar, PrfExpand},
     value::NoteValue,
     Address,
@@ -334,6 +336,22 @@ impl<M: MemoSize> TransmittedNoteCiphertext<M> {
             out_ciphertext,
             _memo: PhantomData,
         }
+    }
+
+    /// Returns the compact fragment of `enc_ciphertext`: the first
+    /// [`COMPACT_NOTE_SIZE`] bytes, which light clients use for trial
+    /// decryption.
+    ///
+    /// This is the single owner of the compact-prefix layout; all
+    /// compact-ciphertext extraction goes through here.
+    pub fn enc_ciphertext_compact(&self) -> NoteBytesData<COMPACT_NOTE_SIZE> {
+        // Guarantees `enc_ciphertext` is longer than COMPACT_NOTE_SIZE for
+        // any `M` that compiles, so the expect below is unreachable.
+        #[allow(clippy::let_unit_value)]
+        let _ = M::SIZE_CHECK;
+
+        NoteBytesData::from_slice(&self.enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE])
+            .expect("enc_ciphertext is at least COMPACT_NOTE_SIZE bytes")
     }
 }
 
