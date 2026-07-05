@@ -344,10 +344,7 @@ impl<T, M: MemoSize> ShieldedOutput<OrchardDomain<M>> for Action<T, M> {
     }
 
     fn enc_ciphertext_compact(&self) -> NoteBytesData<COMPACT_NOTE_SIZE> {
-        NoteBytesData::<COMPACT_NOTE_SIZE>::from_slice(
-            &self.encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE],
-        )
-        .expect("enc_ciphertext is at least COMPACT_NOTE_SIZE bytes")
+        self.encrypted_note().enc_ciphertext_compact()
     }
 }
 
@@ -365,10 +362,7 @@ impl<M: MemoSize> ShieldedOutput<OrchardDomain<M>> for crate::pczt::Action<M> {
     }
 
     fn enc_ciphertext_compact(&self) -> NoteBytesData<COMPACT_NOTE_SIZE> {
-        NoteBytesData::<COMPACT_NOTE_SIZE>::from_slice(
-            &self.output().encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE],
-        )
-        .expect("enc_ciphertext is at least COMPACT_NOTE_SIZE bytes")
+        self.output().encrypted_note().enc_ciphertext_compact()
     }
 }
 
@@ -393,9 +387,7 @@ impl<T, M: MemoSize> From<&Action<T, M>> for CompactAction {
             nullifier: *action.nullifier(),
             cmx: *action.cmx(),
             ephemeral_key: action.ephemeral_key(),
-            enc_ciphertext: action.encrypted_note().enc_ciphertext.as_ref()[..COMPACT_NOTE_SIZE]
-                .try_into()
-                .unwrap(),
+            enc_ciphertext: action.encrypted_note().enc_ciphertext_compact().0,
         }
     }
 }
