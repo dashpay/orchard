@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1782996973749,
+  "lastUpdate": 1783247336158,
   "repoUrl": "https://github.com/dashpay/orchard",
   "entries": {
     "Orchard Benchmarks": [
@@ -1259,6 +1259,186 @@ window.BENCHMARK_DATA = {
             "name": "default_address",
             "value": 488514,
             "range": "± 865",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "quantum@dash.org",
+            "name": "QuantumExplorer",
+            "username": "QuantumExplorer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a6d55af1065f212e23f172110cdaf924fe32ff43",
+          "message": "cleanup: single source of truth for the AEAD tag size in the txid hasher (#9)\n\nThe AEAD tag width existed in three places: a public constant exported\nby the dashpay zcash_note_encryption fork, an unused private duplicate\nin memo.rs, and a bare `- 16` inside hash_bundle_txid_data -- a\nconsensus-critical offset that could drift from the width the\nencryption layer actually uses.\n\nReplace the private duplicate with a documented re-export of the\ndependency's constant and use it in the txid hasher. Also generalize\nthe hash_bundle_txid_data doc comment, which still described the\nZcash-only 52/564 byte offsets on code that is generic over memo size.\n\nNo behavior change: the txid digest golden vectors for both memo sizes\npass unmodified.\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-05T17:17:26+07:00",
+          "tree_id": "217630ba273f5e260f17848fc9308ae1407db845",
+          "url": "https://github.com/dashpay/orchard/commit/a6d55af1065f212e23f172110cdaf924fe32ff43"
+        },
+        "date": 1783247334943,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "proving/bundle/1",
+            "value": 2647480679,
+            "range": "± 18151490",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/2",
+            "value": 2627302821,
+            "range": "± 4944769",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/3",
+            "value": 3759204549,
+            "range": "± 6980886",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/4",
+            "value": 4922961397,
+            "range": "± 13363959",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/1",
+            "value": 20877252,
+            "range": "± 422987",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/2",
+            "value": 20801669,
+            "range": "± 85213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/3",
+            "value": 23960265,
+            "range": "± 120864",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/4",
+            "value": 26948642,
+            "range": "± 295015",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/valid",
+            "value": 1304272,
+            "range": "± 10433",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/invalid",
+            "value": 108412,
+            "range": "± 182",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/compact-valid",
+            "value": 1301874,
+            "range": "± 8366",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compact-note-decryption/invalid",
+            "value": 1143008275,
+            "range": "± 992430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/10",
+            "value": 13760545,
+            "range": "± 41889",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/10",
+            "value": 1862363,
+            "range": "± 7787",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/10",
+            "value": 13728840,
+            "range": "± 18574",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/10",
+            "value": 1822650,
+            "range": "± 21772",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/50",
+            "value": 68755060,
+            "range": "± 78167",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/50",
+            "value": 9180266,
+            "range": "± 52155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/50",
+            "value": 68641408,
+            "range": "± 146447",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/50",
+            "value": 9036132,
+            "range": "± 14080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/100",
+            "value": 137469440,
+            "range": "± 257115",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/100",
+            "value": 18305795,
+            "range": "± 22544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/100",
+            "value": 137272074,
+            "range": "± 273996",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/100",
+            "value": 18012611,
+            "range": "± 93126",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "derive_fvk",
+            "value": 397670,
+            "range": "± 1531",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "default_address",
+            "value": 429399,
+            "range": "± 959",
             "unit": "ns/iter"
           }
         ]
