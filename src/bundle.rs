@@ -528,15 +528,6 @@ impl fmt::Display for BundleError {
 
 impl core::error::Error for BundleError {}
 
-/// A flag type that identifies whether proof sizes are checked in bundle construction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProofSizeEnforcement {
-    /// Proofs may exceed the canonical size
-    Unenforced,
-    /// Proofs may not exceed the canonical size
-    Strict,
-}
-
 impl<V, M: MemoSize> Bundle<Authorized, V, M> {
     /// Constructs an authorized `Bundle` from its constituent parts, rejecting a proof whose
     /// length is not the canonical size for the number of actions.
@@ -553,11 +544,8 @@ impl<V, M: MemoSize> Bundle<Authorized, V, M> {
         value_balance: V,
         anchor: Anchor,
         authorization: Authorized,
-        size_enforcement: ProofSizeEnforcement,
     ) -> Result<Self, BundleError> {
-        if size_enforcement == ProofSizeEnforcement::Strict {
-            validate_proof_size(authorization.proof(), actions.len())?;
-        }
+        validate_proof_size(authorization.proof(), actions.len())?;
         Ok(Bundle::from_parts_unchecked(
             actions,
             flags,
@@ -776,7 +764,6 @@ pub mod testing {
                     proof: Proof::new(fake_proof),
                     binding_signature: sk.sign(rng, &fake_sighash),
                 },
-                super::ProofSizeEnforcement::Strict
             )
             .expect("fake proof has the canonical length")
         }
@@ -830,7 +817,6 @@ mod tests {
                         Proof::new(vec![0u8; proof_len]),
                         binding_signature.clone(),
                     ),
-                    crate::bundle::ProofSizeEnforcement::Strict
                 )
             };
 

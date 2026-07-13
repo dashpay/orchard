@@ -5,6 +5,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Rust's notion of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- `orchard::Bundle::<Authorized, V>::try_from_parts` no longer takes a
+  `ProofSizeEnforcement` argument; the canonical proof size is now always
+  enforced (GHSA-2x4w-pxqw-58v9).
+
+### Removed
+- `orchard::bundle::ProofSizeEnforcement`. The `Unenforced` variant only
+  existed for lenience toward pre-NU6.2 Zcash history, which this fork does
+  not carry; upstream likewise removed the enum in 0.15.0.
+
 ## [0.14.0] - 2026-06-02
 
 ### Added
