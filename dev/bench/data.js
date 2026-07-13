@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783269926944,
+  "lastUpdate": 1783973566314,
   "repoUrl": "https://github.com/dashpay/orchard",
   "entries": {
     "Orchard Benchmarks": [
@@ -1619,6 +1619,186 @@ window.BENCHMARK_DATA = {
             "name": "default_address",
             "value": 488541,
             "range": "± 1581",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "quantum@dash.org",
+            "name": "QuantumExplorer",
+            "username": "QuantumExplorer"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "cd044b8830cfce999db20dcc5112261dd7112237",
+          "message": "harden: always enforce canonical proof size in Bundle::try_from_parts (#11)\n\nRemove the ProofSizeEnforcement enum and its parameter on\nBundle::<Authorized, V>::try_from_parts. The Unenforced variant only\nexisted upstream for lenience toward pre-NU6.2 Zcash history, which\nthis fork does not carry, so proof-size validation\n(GHSA-2x4w-pxqw-58v9) is now unconditional and cannot be bypassed.\nUpstream removed the enum in orchard 0.15.0 as part of the explicit\ncircuit-version refactor; this is the equivalent targeted change.\n\nCo-authored-by: Claude Fable 5 <noreply@anthropic.com>",
+          "timestamp": "2026-07-14T02:55:37+07:00",
+          "tree_id": "33fa9dd756b27d144e7e2d50ce6124694ade03e4",
+          "url": "https://github.com/dashpay/orchard/commit/cd044b8830cfce999db20dcc5112261dd7112237"
+        },
+        "date": 1783973565647,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "proving/bundle/1",
+            "value": 2622824851,
+            "range": "± 42834149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/2",
+            "value": 2595251410,
+            "range": "± 14850866",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/3",
+            "value": 3730002500,
+            "range": "± 41124577",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/4",
+            "value": 4828416046,
+            "range": "± 25147137",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/1",
+            "value": 20625670,
+            "range": "± 576149",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/2",
+            "value": 20581572,
+            "range": "± 181542",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/3",
+            "value": 23757553,
+            "range": "± 189522",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/4",
+            "value": 27120527,
+            "range": "± 226102",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/valid",
+            "value": 1481535,
+            "range": "± 9238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/invalid",
+            "value": 124597,
+            "range": "± 190",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/compact-valid",
+            "value": 1476797,
+            "range": "± 5384",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compact-note-decryption/invalid",
+            "value": 1309014146,
+            "range": "± 3701033",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/10",
+            "value": 15620572,
+            "range": "± 416642",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/10",
+            "value": 2111935,
+            "range": "± 58447",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/10",
+            "value": 15586730,
+            "range": "± 73808",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/10",
+            "value": 2077822,
+            "range": "± 14029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/50",
+            "value": 77977567,
+            "range": "± 522129",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/50",
+            "value": 10505028,
+            "range": "± 610159",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/50",
+            "value": 77910624,
+            "range": "± 641208",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/50",
+            "value": 10337235,
+            "range": "± 57134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/100",
+            "value": 155958971,
+            "range": "± 323430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/100",
+            "value": 20987769,
+            "range": "± 66516",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/100",
+            "value": 155705397,
+            "range": "± 2059028",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/100",
+            "value": 20650546,
+            "range": "± 43936",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "derive_fvk",
+            "value": 453528,
+            "range": "± 5704",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "default_address",
+            "value": 488649,
+            "range": "± 2468",
             "unit": "ns/iter"
           }
         ]
