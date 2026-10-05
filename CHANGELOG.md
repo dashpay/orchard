@@ -8,6 +8,11 @@ and this project adheres to Rust's notion of
 ## [Unreleased]
 
 ### Changed
+- `orchard::circuit::ProvingKey::build{,_for_version}` and
+  `orchard::circuit::VerifyingKey::build{,_for_version}` no longer derive the
+  Halo 2 commitment parameters with `Params::new(11)`; they decode an embedded
+  copy of its canonical serialization (128 KiB, checked byte-for-byte against
+  `Params::new` by the test suite). The resulting keys are unchanged.
 - `orchard::Bundle::<Authorized, V>::try_from_parts` no longer takes a
   `ProofSizeEnforcement` argument; the canonical proof size is now always
   enforced (GHSA-2x4w-pxqw-58v9).
