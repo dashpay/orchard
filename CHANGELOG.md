@@ -13,6 +13,12 @@ and this project adheres to Rust's notion of
   Halo 2 commitment parameters with `Params::new(11)`; they decode an embedded
   copy of its canonical serialization (128 KiB, checked byte-for-byte against
   `Params::new` by the test suite). The resulting keys are unchanged.
+- The Orchard fixed bases' `halo2_gadgets::ecc::chip::FixedPoint::lagrange_coeffs`
+  (used when synthesizing the circuit into a proving or verifying key) now
+  return embedded, canonical interpolation coefficients (117 KiB across seven
+  tables) instead of re-deriving them from the generator on every call. The
+  values, and therefore the keys, are unchanged; the test suite checks every
+  fixed base against `compute_lagrange_coeffs`.
 - `orchard::Bundle::<Authorized, V>::try_from_parts` no longer takes a
   `ProofSizeEnforcement` argument; the canonical proof size is now always
   enforced (GHSA-2x4w-pxqw-58v9).
