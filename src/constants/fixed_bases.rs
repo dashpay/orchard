@@ -16,6 +16,8 @@ use pasta_curves::pallas;
 
 /// Precomputed table for the `CommitIvk` commitment randomness base.
 pub mod commit_ivk_r;
+#[cfg(feature = "circuit")]
+mod lagrange_coeffs;
 /// Precomputed table for the `NoteCommit` commitment randomness base.
 pub mod note_commit_r;
 /// Precomputed table for the nullifier base `K^Orchard`.
@@ -174,6 +176,17 @@ impl FixedPoint<pallas::Affine> for OrchardFixedBasesFull {
             Self::SpendAuthG => spend_auth_g::Z.to_vec(),
         }
     }
+
+    // Embedded instead of derived from the generator on every call; see
+    // `lagrange_coeffs`.
+    fn lagrange_coeffs(&self) -> Vec<[pallas::Base; H]> {
+        match self {
+            Self::CommitIvkR => lagrange_coeffs::COMMIT_IVK_R.coeffs(),
+            Self::NoteCommitR => lagrange_coeffs::NOTE_COMMIT_R.coeffs(),
+            Self::ValueCommitR => lagrange_coeffs::VALUE_COMMIT_R.coeffs(),
+            Self::SpendAuthG => lagrange_coeffs::SPEND_AUTH_G.coeffs(),
+        }
+    }
 }
 
 #[cfg(feature = "circuit")]
@@ -204,6 +217,14 @@ impl FixedPoint<pallas::Affine> for OrchardBaseFieldBases {
             Self::SpendAuthGBase => spend_auth_g::Z.to_vec(),
         }
     }
+
+    fn lagrange_coeffs(&self) -> Vec<[pallas::Base; H]> {
+        match self {
+            Self::NullifierK => lagrange_coeffs::NULLIFIER_K.coeffs(),
+            // Same generator and window count as the full-width scalar table.
+            Self::SpendAuthGBase => lagrange_coeffs::SPEND_AUTH_G.coeffs(),
+        }
+    }
 }
 
 #[cfg(feature = "circuit")]
@@ -230,11 +251,55 @@ impl FixedPoint<pallas::Affine> for OrchardShortScalarBases {
             Self::SpendAuthGShort => spend_auth_g::Z_SHORT.to_vec(),
         }
     }
+
+    fn lagrange_coeffs(&self) -> Vec<[pallas::Base; H]> {
+        match self {
+            Self::ValueCommitV => lagrange_coeffs::VALUE_COMMIT_V_SHORT.coeffs(),
+            Self::SpendAuthGShort => lagrange_coeffs::SPEND_AUTH_G_SHORT.coeffs(),
+        }
+    }
 }
 
 #[cfg(all(test, feature = "circuit"))]
 mod tests {
     use super::*;
+
+    /// The embedded `lagrange_coeffs` overrides return exactly what `halo2_gadgets`'
+    /// default implementation would derive, for every fixed base and scalar kind. This
+    /// checks the dispatch (table and window count) as well as the table contents.
+    #[test]
+    fn lagrange_coeffs_match_default_derivation() {
+        use halo2_gadgets::ecc::chip::{compute_lagrange_coeffs, FixedScalarKind};
+
+        fn check<F: FixedPoint<pallas::Affine>>(base: F) {
+            assert_eq!(
+                base.lagrange_coeffs(),
+                compute_lagrange_coeffs(base.generator(), F::FixedScalarKind::NUM_WINDOWS),
+                "{base:?}"
+            );
+        }
+
+        for base in [
+            OrchardFixedBasesFull::CommitIvkR,
+            OrchardFixedBasesFull::NoteCommitR,
+            OrchardFixedBasesFull::ValueCommitR,
+            OrchardFixedBasesFull::SpendAuthG,
+        ] {
+            check(base);
+        }
+        for base in [
+            OrchardBaseFieldBases::NullifierK,
+            OrchardBaseFieldBases::SpendAuthGBase,
+        ] {
+            check(base);
+        }
+        for base in [
+            OrchardShortScalarBases::ValueCommitV,
+            OrchardShortScalarBases::SpendAuthGShort,
+        ] {
+            check(base);
+        }
+    }
 
     /// Ensures that `OrchardBaseFieldBases::SpendAuthGBase` routes to the
     /// correct generator and tables via the `FixedPoint` trait. The U/Z data
