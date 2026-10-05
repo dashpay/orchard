@@ -74,6 +74,31 @@ pub use crate::Proof;
 /// Size of the Orchard circuit.
 const K: u32 = 11;
 
+/// The canonical serialization (`Params::write`) of `Params::<vesta::Affine>::new(K)`.
+///
+/// The parameters are public and deterministic (every generator is a hash-to-curve output),
+/// but deriving them costs one hash-to-curve per generator plus an inverse FFT over the
+/// curve, which is a large share of a cold key build. Decoding this encoding with `Params::read` is
+/// an order of magnitude cheaper. `tests::embedded_params_match_derivation` checks it
+/// byte-for-byte against `Params::new(K)`. It would only need regenerating if `Params::new`
+/// itself changed (which would change every key); to do so, run:
+///
+/// ```text
+/// cargo test --release --lib -- --ignored regenerate_embedded
+/// ```
+const PARAMS_BYTES: &[u8] = include_bytes!("circuit_data/vesta_params_k11.bin");
+
+// `k`, then `2^K` points of `g` and `2^K` points of `g_lagrange`, then `w` and `u`.
+const _: () = assert!(PARAMS_BYTES.len() == 4 + (2 * (1 << K) + 2) * 32);
+
+/// Returns `Params::<vesta::Affine>::new(K)`, decoded from [`PARAMS_BYTES`].
+fn params() -> halo2_proofs::poly::commitment::Params<vesta::Affine> {
+    let params = halo2_proofs::poly::commitment::Params::read(&mut &PARAMS_BYTES[..])
+        .expect("embedded params are valid");
+    assert_eq!(params.k(), K);
+    params
+}
+
 // Absolute offsets for public inputs.
 const ANCHOR: usize = 0;
 const CV_NET_X: usize = 1;
@@ -848,7 +873,7 @@ impl VerifyingKey {
 
     /// Builds the verifying key for the given circuit version.
     pub fn build_for_version(circuit_version: OrchardCircuitVersion) -> Self {
-        let params = halo2_proofs::poly::commitment::Params::new(K);
+        let params = params();
         let circuit = Circuit {
             circuit_version,
             ..Default::default()
@@ -883,7 +908,7 @@ impl ProvingKey {
     /// the network; [`OrchardCircuitVersion::InsecurePreNu6_2`] exists only to reproduce
     /// historical proofs (e.g. for testing that pre-NU6.2 proofs still verify).
     pub fn build_for_version(circuit_version: OrchardCircuitVersion) -> Self {
-        let params = halo2_proofs::poly::commitment::Params::new(K);
+        let params = params();
         let circuit = Circuit {
             circuit_version,
             ..Default::default()
@@ -1101,7 +1126,9 @@ mod tests {
     use pasta_curves::pallas;
     use rand::{rngs::OsRng, RngCore};
 
-    use super::{Circuit, Instance, OrchardCircuitVersion, Proof, ProvingKey, VerifyingKey, K};
+    use super::{
+        Circuit, Instance, OrchardCircuitVersion, Proof, ProvingKey, VerifyingKey, K, PARAMS_BYTES,
+    };
     use crate::{
         keys::SpendValidatingKey,
         note::{Note, Rho},
@@ -1219,6 +1246,39 @@ mod tests {
         let proof = Proof::new(proof_bytes);
 
         Ok((instance, proof))
+    }
+
+    fn derived_params_bytes() -> Vec<u8> {
+        let mut bytes = vec![];
+        halo2_proofs::poly::commitment::Params::<pasta_curves::vesta::Affine>::new(K)
+            .write(&mut bytes)
+            .unwrap();
+        bytes
+    }
+
+    /// The embedded parameters are exactly the canonical serialization of `Params::new(K)`,
+    /// and decode to parameters that serialize back to the same bytes.
+    #[test]
+    fn embedded_params_match_derivation() {
+        let derived = derived_params_bytes();
+        assert!(PARAMS_BYTES == &derived[..], "embedded params differ");
+        let mut decoded = vec![];
+        super::params().write(&mut decoded).unwrap();
+        assert!(decoded == derived, "embedded params do not round-trip");
+    }
+
+    /// Rewrites the embedded parameters from `Params::new(K)`.
+    #[test]
+    #[ignore = "regenerates the embedded params"]
+    fn regenerate_embedded_params() {
+        std::fs::write(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/circuit_data/vesta_params_k11.bin"
+            ),
+            derived_params_bytes(),
+        )
+        .expect("can write embedded params");
     }
 
     // TODO: recast as a proptest
