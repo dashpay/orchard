@@ -954,8 +954,7 @@ dependencies = [
 [[package]]
 name = "halo2_gadgets"
 version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb2a697cad929f706b7987fe804ad57d43622cd37463ba7e4d662a926fdcfea3"
+source = "git+https://github.com/dashpay/halo2?rev=581e2459deee18118e4b6331e7b3432ecc989265#581e2459deee18118e4b6331e7b3432ecc989265"
 dependencies = [
  "arrayvec",
  "bitvec",
@@ -981,8 +980,7 @@ checksum = "47716fe1ae67969c5e0b2ef826f32db8c3be72be325e1aa3c1951d06b5575ec5"
 [[package]]
 name = "halo2_poseidon"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fa3da60b81f02f9b33ebc6252d766f843291fb4d2247a07ae73d20b791fc56f"
+source = "git+https://github.com/dashpay/halo2?rev=581e2459deee18118e4b6331e7b3432ecc989265#581e2459deee18118e4b6331e7b3432ecc989265"
 dependencies = [
  "bitvec",
  "ff",
@@ -993,8 +991,7 @@ dependencies = [
 [[package]]
 name = "halo2_proofs"
 version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "05713f117155643ce10975e0bee44a274bcda2f4bb5ef29a999ad67c1fa8d4d3"
+source = "git+https://github.com/dashpay/halo2?rev=581e2459deee18118e4b6331e7b3432ecc989265#581e2459deee18118e4b6331e7b3432ecc989265"
 dependencies = [
  "blake2b_simd",
  "ff",
@@ -1458,6 +1455,7 @@ dependencies = [
  "pprof",
  "proptest",
  "rand",
+ "rand_chacha",
  "rand_core",
  "reddsa",
  "serde",
@@ -1502,9 +1500,9 @@ dependencies = [
 
 [[package]]
 name = "pasta_curves"
-version = "0.5.1"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3e57598f73cc7e1b2ac63c79c517b31a0877cd7c402cdcaa311b5208de7a095"
+checksum = "3437083215c505e867eea5478371feba43d7689d6d15ec0a209eb46fb0d4cda6"
 dependencies = [
  "blake2b_simd",
  "ff",

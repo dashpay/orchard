@@ -38,7 +38,7 @@ rand = { version = "0.8", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 reddsa = { version = "0.5", default-features = false }
 nonempty = { version = "0.11", default-features = false }
-poseidon = { package = "halo2_poseidon", version = "0.1" }
+poseidon = { package = "halo2_poseidon", git = "https://github.com/dashpay/halo2", rev = "581e2459deee18118e4b6331e7b3432ecc989265" }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 sinsemilla = "0.1"
 subtle = { version = "2.6", default-features = false }
@@ -49,8 +49,10 @@ zip32 = { version = "0.2.0", default-features = false }
 visibility = "0.1.1"
 
 # Circuit
-halo2_gadgets = { version = "0.5", optional = true, default-features = false }
-halo2_proofs = { version = "0.3", optional = true, default-features = false, features = ["batch", "floor-planner-v1-legacy-pdqsort"] }
+# Dash's halo2 fork (https://github.com/dashpay/halo2): the crates.io halo2_proofs 0.3.2 /
+# halo2_gadgets 0.5.0 / halo2_poseidon 0.1.0 sources plus prover performance work.
+halo2_gadgets = { git = "https://github.com/dashpay/halo2", rev = "581e2459deee18118e4b6331e7b3432ecc989265", optional = true, default-features = false }
+halo2_proofs = { git = "https://github.com/dashpay/halo2", rev = "581e2459deee18118e4b6331e7b3432ecc989265", optional = true, default-features = false, features = ["batch", "floor-planner-v1-legacy-pdqsort"] }
 
 # Boilerplate
 getset = "0.1"
@@ -67,7 +69,8 @@ plotters = { version = "0.3.0", optional = true }
 
 [dev-dependencies]
 criterion = "0.4" # 0.5 depends on clap 4 which has MSRV 1.70
-halo2_gadgets = { version = "0.5", features = ["test-dependencies"] }
+halo2_gadgets = { git = "https://github.com/dashpay/halo2", rev = "581e2459deee18118e4b6331e7b3432ecc989265", features = ["test-dependencies"] }
+rand_chacha = "0.3"
 hex = "0.4"
 proptest = ">=1.0.0, <1.7.0"
 zcash_note_encryption = { git = "https://github.com/dashpay/zcash_note_encryption", rev = "9f7e93d", features = ["pre-zip-212"] }
@@ -103,6 +106,10 @@ harness = false
 [[bench]]
 name = "circuit"
 harness = false
+required-features = ["circuit"]
+
+[[example]]
+name = "prover_bench"
 required-features = ["circuit"]
 
 [profile.release]
