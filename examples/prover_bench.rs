@@ -10,6 +10,7 @@
 //! ```
 //!
 //! - `cold`: time `ProvingKey::build` and `VerifyingKey::build` (run in a fresh process).
+//!   `VerifyingKey::build` runs second, so its timing excludes Rayon thread-pool startup.
 //! - `prove`: build the keys, prove one untimed bundle, then time `--iters` proofs.
 //! - `seeded`: prove with a seeded RNG and print each proof's BLAKE2b-256 digest, so two
 //!   builds of the prover can be checked for byte-identical output. Test-only randomness:
