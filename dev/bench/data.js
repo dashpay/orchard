@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1783973566314,
+  "lastUpdate": 1794077129207,
   "repoUrl": "https://github.com/dashpay/orchard",
   "entries": {
     "Orchard Benchmarks": [
@@ -1799,6 +1799,186 @@ window.BENCHMARK_DATA = {
             "name": "default_address",
             "value": 488649,
             "range": "± 2468",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "6443210+PastaPastaPasta@users.noreply.github.com",
+            "name": "PastaPastaPasta",
+            "username": "PastaPastaPasta"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "f018a7cd5d26b0274665dea29ecbb6408a7e7d4e",
+          "message": "ci: raise the tarpaulin timeout so the coverage job can finish (#14)\n\nThe xd009642/tarpaulin:develop-nightly image now kills a test binary 600 s\nafter it starts. Under llvm instrumentation the orchard lib tests take\nlonger than that (the proof tests alone run several minutes each), so the\nCode coverage job fails on every pull request, partway through\ncircuit::tests. Coverage jobs passed in July at about 56 minutes in total.\n\nCo-authored-by: Claude Opus 5.5 <noreply@anthropic.com>",
+          "timestamp": "2026-11-08T01:34:24+07:00",
+          "tree_id": "9e652bda18f797676ab17b93672719eb470f6cec",
+          "url": "https://github.com/dashpay/orchard/commit/f018a7cd5d26b0274665dea29ecbb6408a7e7d4e"
+        },
+        "date": 1794077128450,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "proving/bundle/1",
+            "value": 2294185873,
+            "range": "± 18934654",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/2",
+            "value": 2287972799,
+            "range": "± 5288183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/3",
+            "value": 3219841269,
+            "range": "± 13393169",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "proving/bundle/4",
+            "value": 4208189586,
+            "range": "± 24212466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/1",
+            "value": 18845274,
+            "range": "± 137971",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/2",
+            "value": 19258524,
+            "range": "± 353942",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/3",
+            "value": 21727516,
+            "range": "± 189035",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "verifying/bundle/4",
+            "value": 24481298,
+            "range": "± 234257",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/valid",
+            "value": 1271226,
+            "range": "± 14009",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/invalid",
+            "value": 105810,
+            "range": "± 805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "note-decryption/compact-valid",
+            "value": 1268914,
+            "range": "± 8850",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "compact-note-decryption/invalid",
+            "value": 1108491954,
+            "range": "± 3025080",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/10",
+            "value": 13478597,
+            "range": "± 67360",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/10",
+            "value": 1774650,
+            "range": "± 12768",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/10",
+            "value": 13369965,
+            "range": "± 86725",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/10",
+            "value": 1731484,
+            "range": "± 12251",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/50",
+            "value": 66771931,
+            "range": "± 392309",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/50",
+            "value": 8740641,
+            "range": "± 55003",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/50",
+            "value": 66513679,
+            "range": "± 387183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/50",
+            "value": 8593312,
+            "range": "± 53434",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/valid/100",
+            "value": 133516882,
+            "range": "± 852418",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/invalid/100",
+            "value": 17515372,
+            "range": "± 102157",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-valid/100",
+            "value": 131711287,
+            "range": "± 419480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "batch-note-decryption/compact-invalid/100",
+            "value": 16989625,
+            "range": "± 73253",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "derive_fvk",
+            "value": 374851,
+            "range": "± 2120",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "default_address",
+            "value": 413910,
+            "range": "± 9014",
             "unit": "ns/iter"
           }
         ]
